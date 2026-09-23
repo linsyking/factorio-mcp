@@ -260,7 +260,7 @@ def register(app: MCPServer, game: Game) -> None:
     @tool("Your character's position, inventory, equipment and jobs, plus what it knows around it: players and other "
           "agent characters in view, resource patches and trees on explored ground, your force's buildings with "
           "status counts, visible enemies, research, power and top production.")
-    async def look_around(radius: Annotated[float, Field(ge=5, le=80, description="tiles, default 40")] = 40) -> str:
+    async def look_around(radius: Annotated[float, Field(ge=5, le=150, description="tiles, default 40")] = 40) -> str:
         return fmt.state(await game.call("get_state", {"radius": radius}))
 
     @tool("Your character's inventory and equipment.")
@@ -292,14 +292,28 @@ def register(app: MCPServer, game: Game) -> None:
             raise ValueError("give x and y, or targets")
         return fmt.inspect(await game.call("inspect", {"position": pos}))
 
-    @tool("ASCII tile grid of a square area: one character per tile, rows north to south. Unexplored tiles are '?'. "
+    @tool("ASCII tile grid of a square area (radius up to 120): one character per tile, or per scale x scale tiles "
+          "for large scans (automatic above radius 40), rows north to south. Unexplored tiles are '?'. "
           "The legend explains every symbol (uppercase = resources, lowercase = your force's buildings, @ = you).")
     async def scan_area(
         x: float | None = None,
         y: float | None = None,
-        radius: Annotated[int, Field(ge=5, le=30, description="half-width in tiles, default 15")] = 15,
+        radius: Annotated[int, Field(ge=5, le=120, description="half-width in tiles, default 15")] = 15,
+        scale: Annotated[int | None, Field(ge=1, le=8, description="tiles per character; default 1 up to radius 40, "
+                                           "then automatic so the grid stays about 81 wide")] = None,
     ) -> str:
-        return fmt.scan(await game.call("scan_area", {"center": xy(x, y, "scan center"), "radius": radius}))
+        params: dict[str, Any] = {"center": xy(x, y, "scan center"), "radius": radius}
+        if scale:
+            params["scale"] = scale
+        return fmt.scan(await game.call("scan_area", params))
+
+    @tool("The map screen: resource patches, rock clusters, forests, water and enemy bases on all ground you know "
+          "(explored or charted) within radius tiles (default 320, max 640), grouped by connected chunks and listed "
+          "nearest first with centre, area, size and a tile of each patch to walk to. Chunk resolution; use "
+          "look_around / scan_area for detail.")
+    async def map_overview(x: float | None = None, y: float | None = None,
+                           radius: Annotated[int, Field(ge=32, le=640, description="tiles, default 320")] = 320) -> str:
+        return fmt.overview(await game.call("map_overview", {"center": xy(x, y, "overview center"), "radius": radius}))
 
     @tool("Everything about up to 10 names at once — the item (stack size, fuel value), the entity it places (footprint, "
           "power use in kW, crafting/mining speed, mining area, drill drop offset, inserter pickup/drop offsets, module "
@@ -310,7 +324,7 @@ def register(app: MCPServer, game: Game) -> None:
 
     @tool("Machines of your force in an area (explored ground) grouped by problem — no power, low power, no fuel, "
           "missing ingredients (with which ingredient when detectable), output full, depleted ore, idle — plus power summary.")
-    async def analyze_factory(radius: Annotated[float, Field(ge=5, le=80)] = 40) -> str:
+    async def analyze_factory(radius: Annotated[float, Field(ge=5, le=150)] = 40) -> str:
         r = await game.call("analyze_factory", {"radius": radius})
         lines = [f"Checked {r['machines_checked']} entities with a status within {r['radius']} tiles: "
                  f"{r['working']} working, {r.get('with_problems', 0)} with problems, "
@@ -525,7 +539,7 @@ def register(app: MCPServer, game: Game) -> None:
         return await run_job({"type": "follow_player", "player": player, "distance": distance}, 0, True)
 
     @tool("Mine by hand (vanilla mining time and reach): either the minable thing at x,y, or `count` mining operations "
-          'of a resource name ("iron-ore", "coal", "stone", "tree", "rock", ...) found on explored ground within 80 tiles. '
+          'of a resource name ("iron-ore", "coal", "stone", "tree", "rock", ...) found on explored ground within 200 tiles. '
           "One operation = 1 ore from a patch, or one whole tree/rock: count=2 with \"rock\" mines two rocks "
           "(a big rock gives about 20–25 stone).")
     async def mine(x: float | None = None, y: float | None = None, resource: str | None = None,

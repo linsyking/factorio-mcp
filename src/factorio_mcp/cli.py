@@ -42,6 +42,7 @@ def config_from(args: argparse.Namespace) -> Config:
         takeover=args.takeover or _env_bool("FACTORIO_TAKEOVER"),
         default_wait_s=float(os.environ.get("FACTORIO_MCP_WAIT_S", 0)),
         inbox=os.environ.get("FACTORIO_MCP_INBOX", "1").strip().lower() not in ("0", "false", "no", "off"),
+        eager_bind=not _env_bool("FACTORIO_MCP_NO_BIND"),
     )
 
 
@@ -55,6 +56,7 @@ def _server_env(cfg: Config) -> dict[str, str]:
         "FACTORIO_TAKEOVER": "1" if cfg.takeover else "0",
         "FACTORIO_MCP_WAIT_S": str(cfg.default_wait_s),
         "FACTORIO_MCP_INBOX": "1" if cfg.inbox else "0",
+        "FACTORIO_MCP_NO_BIND": "0" if cfg.eager_bind else "1",
     })
     return env
 
@@ -222,6 +224,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--out", default=str(ROOT / "dist"))
     args = p.parse_args(argv)
     cfg = config_from(args)
+    if args.command == "tools":
+        cfg.eager_bind = False  # listing tools must never spawn a character
 
     if args.command == "serve":
         from .server import run

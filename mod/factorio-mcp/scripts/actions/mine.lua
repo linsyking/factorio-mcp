@@ -13,7 +13,7 @@ local stats = require("scripts.stats")
 local M = {}
 
 local TARGET_SEARCH_RADIUS = 2.0
-local COMPOSITE_SEARCH_RADIUS = 80
+local COMPOSITE_SEARCH_RADIUS = 200
 local MAX_OPS = 200
 local MINABLE_TYPES = { "resource", "tree", "simple-entity" }
 

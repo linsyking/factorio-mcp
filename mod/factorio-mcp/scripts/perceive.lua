@@ -11,7 +11,7 @@ local items = require("scripts.items")
 local M = {}
 
 local DEFAULT_RADIUS = 40
-local MAX_RADIUS = 80
+local MAX_RADIUS = 150
 local MAX_PATCHES = 12
 local MAX_STRUCTURE_GROUPS = 30
 local MAX_PRODUCTION_ITEMS = 8

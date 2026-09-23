@@ -64,7 +64,7 @@ uv run factorio-mcp tools       # list the tools and the server instructions
 |---|---|---|
 | `FACTORIO_RCON_HOST` / `FACTORIO_RCON_PORT` | `127.0.0.1` / `27015` | |
 | `FACTORIO_RCON_PASSWORD` | — | required |
-| `FACTORIO_CHARACTER` | `agent` | the character this instance controls, e.g. `scout-1` |
+| `FACTORIO_CHARACTER` | `agent` | the character this instance controls, e.g. `scout-1` (`factorio-mcp tools` never binds one) |
 | `FACTORIO_TAKEOVER` | `0` | `1` = take the character over even if another session holds it |
 | `FACTORIO_MCP_WAIT_S` | `0` | default `wait_s` for job tools; 0 = queue and return at once |
 | `FACTORIO_MCP_INBOX` | `1` | append unread game chat (players, other agents) to every tool result, so agents never need to poll `read_chat`; `0` turns it off |

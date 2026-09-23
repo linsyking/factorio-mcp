@@ -35,4 +35,13 @@ data:extend({
     maximum_value = 256,
     order = "d",
   },
+  {
+    type = "int-setting",
+    name = "factorio-mcp-start-area",
+    setting_type = "runtime-global",
+    default_value = 200,
+    minimum_value = 0,
+    maximum_value = 1000,
+    order = "e",
+  },
 })

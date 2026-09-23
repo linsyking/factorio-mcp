@@ -229,6 +229,9 @@ local function spawn_body(name)
   local existing = M.get(name)
   if existing then
     normalize_body(existing)
+    pcall(function()
+      vision.grant_start_area(existing.surface, existing.force, existing.force.get_spawn_position(existing.surface))
+    end)
     return body_summary(name, existing, true, nil)
   end
   local rec = records()[name]
@@ -254,6 +257,7 @@ local function spawn_body(name)
   ent.color = color_for(name)
   normalize_body(ent)
   local kit = give_kit(ent, respawn and "respawn_items" or "created_items")
+  pcall(function() vision.grant_start_area(surface, force, anchor) end)
   attach_label(rec, name, ent)
   M.update_map_tag()
   return body_summary(name, ent, false, kit)

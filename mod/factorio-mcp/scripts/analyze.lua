@@ -8,7 +8,7 @@ local perceive = require("scripts.perceive")
 local M = {}
 
 local DEFAULT_RADIUS = 40
-local MAX_RADIUS = 80
+local MAX_RADIUS = 150
 local MAX_PROBLEM_GROUPS = 15
 
 -- Statuses reported as problems. Everything else that isn't working (idle

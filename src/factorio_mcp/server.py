@@ -65,7 +65,7 @@ def build_app(cfg: Config) -> MCPServer:
             except ModError as e:
                 print(f"[factorio-mcp] not connected yet: {e}", file=sys.stderr)
 
-        bind_task = asyncio.create_task(eager_bind())
+        bind_task = asyncio.create_task(eager_bind() if cfg.eager_bind else asyncio.sleep(0))
         hb = asyncio.create_task(game.heartbeat_loop())
         try:
             yield game

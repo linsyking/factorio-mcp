@@ -148,9 +148,13 @@ def inspect(e: dict[str, Any]) -> str:
 
 def scan(r: dict[str, Any]) -> str:
     o = r["origin"]
+    k = int(r.get("scale") or 1)
+    where = (f"grid[row][col] is map ({o['x']} + col, {o['y']} + row)" if k == 1 else
+             f"each character covers {k}x{k} tiles and shows the most important thing in them; grid[row][col] "
+             f"covers map ({o['x']} + {k}*col, {o['y']} + {k}*row) and the next {k - 1} tiles right and down")
     lines = [
         f"Scanned {r['width']}x{r['height']} tiles. Grid origin (top-left) is map ({o['x']}, {o['y']}); "
-        f"grid[row][col] is map ({o['x']} + col, {o['y']} + row). Rows run north to south.",
+        f"{where}. Rows run north to south.",
         "```",
         *as_list(r.get("grid")),
         "```",
@@ -268,4 +272,38 @@ def blueprint(bp: dict[str, Any]) -> str:
     tiles = bp.get("tiles")
     if tiles:
         lines.append(f"Also {tiles['count']} floor tiles ({', '.join(as_list(tiles.get('kinds')))}); no tool places tiles.")
+    return "\n".join(lines)
+
+
+def overview(r: dict[str, Any]) -> str:
+    groups = as_list(r.get("groups"))
+    you = r.get("you") or {}
+    lines = [f"Map overview within {r.get('radius')} tiles of ({r['center']['x']:.0f}, {r['center']['y']:.0f}): "
+             f"{r.get('known_chunks')} of {r.get('total_chunks')} chunks known (32x32 tiles each; the rest is unexplored). "
+             f"You are at ({you.get('x', 0):.0f}, {you.get('y', 0):.0f}). Nearest first:"]
+    unit = {"rocks": "rocks", "trees": "trees", "water": "water tiles", "enemy base": "spawners/worms"}
+    # rocks and trees come in many small groups: list the nearest few, sum the rest
+    shown: dict[str, int] = {}
+    skipped: dict[str, list[int]] = {}
+    keep = []
+    for g in groups:
+        k = g["kind"]
+        if k in ("rocks", "trees") and shown.get(k, 0) >= 4:
+            skipped.setdefault(k, []).append(g["count"])
+            continue
+        shown[k] = shown.get(k, 0) + 1
+        keep.append(g)
+    groups_all, groups = groups, keep
+    for g in groups:
+        a, at = g["area"], g["at"]
+        what = unit.get(g["kind"], "tiles")
+        lines.append(f"  {g['kind']}: {g['count']} {what} over {g['chunks']} chunk(s), centre ({g['center']['x']}, "
+                     f"{g['center']['y']}), area x {a['x1']}..{a['x2']}, y {a['y1']}..{a['y2']}, {g['distance']} tiles away"
+                     + ("" if g["kind"] in unit else f"; a tile of it at ({at['x']}, {at['y']})"))
+    for k, counts in skipped.items():
+        lines.append(f"  (+{len(counts)} farther {k} groups, {sum(counts)} {k} in all)")
+    if r.get("more"):
+        lines.append(f"  … and {r['more']} more farther away (lower the radius or move the centre).")
+    if not groups_all:
+        lines.append("  nothing known here yet.")
     return "\n".join(lines)

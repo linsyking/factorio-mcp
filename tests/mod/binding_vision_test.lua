@@ -35,7 +35,7 @@ end
 
 _G.game = { tick = 1000, forces = { player = force }, surfaces = { nauvis = surface, [1] = surface } }
 _G.storage = {}
-_G.settings = { global = {} }
+_G.settings = { global = { ["factorio-mcp-start-area"] = { value = 0 } } } -- fog tests start from nothing
 _G.rendering = { draw_text = function() return { valid = true, destroy = function() end } end }
 _G.prototypes = { item = { pistol = {}, ["iron-plate"] = {} }, quality = { normal = {}, rare = {} } }
 _G.remote = {
@@ -152,6 +152,18 @@ do
   companion.set_context("scout-1")
   check(c.cancelled == 1 and tasks.get({ task_id = a.task_id }).status == "running",
     "jobs: cancel all only clears the own lane (both lanes ran in parallel)")
+end
+
+do -- the starting area: agents know the ground around spawn, like a new player's map
+  settings.global["factorio-mcp-start-area"] = { value = 200 }
+  local f2 = { index = 99, is_chunk_charted = function() return false end }
+  local s2 = { index = 7, request_to_generate_chunks = function() end, is_chunk_generated = function() return true end }
+  check(not vision.is_known(s2, f2, { x = 150, y = -150 }), "start area: unknown before it is granted")
+  vision.grant_start_area(s2, f2, { x = 0, y = 0 })
+  check(vision.is_known(s2, f2, { x = 150, y = -150 }), "start area: 150 tiles from spawn is known")
+  check(not vision.is_known(s2, f2, { x = 300, y = 0 }), "start area: 300 tiles from spawn is still unexplored")
+  check(#vision.known_chunks(s2, f2, -40, -40, 40, 40) == 16, "start area: known_chunks lists the chunks a rectangle touches (4x4)")
+  settings.global["factorio-mcp-start-area"] = { value = 0 }
 end
 
 print(failures == 0 and "\nALL TESTS PASSED" or ("\n" .. failures .. " FAILURES"))

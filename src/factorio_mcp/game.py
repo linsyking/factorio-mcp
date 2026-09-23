@@ -35,6 +35,7 @@ class Config:
     default_wait_s: float = 0.0  # 0 = job tools queue and return at once
     rcon_timeout_s: float = 15.0
     inbox: bool = True  # append unread chat to every tool result
+    eager_bind: bool = True  # bind the character when the server starts (off for `tools`)
 
 
 class Game:

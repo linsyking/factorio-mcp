@@ -27,6 +27,7 @@ end
 function M.chart_radius() return setting("factorio-mcp-chart-radius", 2) end     -- chunks
 function M.view_radius() return setting("factorio-mcp-view-radius", 32) end      -- tiles
 function M.explore_radius() return setting("factorio-mcp-explore-radius", 64) end -- tiles
+function M.start_area() return setting("factorio-mcp-start-area", 200) end        -- tiles around spawn
 
 local function root()
   storage.vision = storage.vision or { explored = {} }
@@ -61,6 +62,48 @@ function M.mark(entity)
     end
   end
   pcall(function() entity.surface.request_to_generate_chunks(entity.position, r + 1) end)
+end
+
+-- A player starts with the area around spawn on the map (freeplay charts 200
+-- tiles around the first player), so an agent does too. The engine won't chart
+-- for a force without players, so the chunks go into our explored set, once
+-- per force and surface.
+function M.grant_start_area(surface, force, center)
+  local r = M.start_area()
+  if r <= 0 then return end
+  local v = root()
+  v.start_granted = v.start_granted or {}
+  local k = force.index .. ":" .. surface.index
+  if v.start_granted[k] then return end
+  v.start_granted[k] = true
+  local set = explored_set(force, surface)
+  local x1, y1 = chunk_of({ x = center.x - r, y = center.y - r })
+  local x2, y2 = chunk_of({ x = center.x + r, y = center.y + r })
+  for cx = x1, x2 do
+    for cy = y1, y2 do
+      set[key(cx, cy)] = true
+    end
+  end
+  pcall(function() surface.request_to_generate_chunks(center, math.ceil(r / 32)) end)
+end
+
+-- Known chunks in a tile rectangle, as {cx, cy} (explored or charted).
+function M.known_chunks(surface, force, x1, y1, x2, y2)
+  local set = explored_set(force, surface)
+  local out = {}
+  local ax, ay = chunk_of({ x = x1, y = y1 })
+  local bx, by = chunk_of({ x = x2, y = y2 })
+  for cx = ax, bx do
+    for cy = ay, by do
+      local known = set[key(cx, cy)]
+      if not known then
+        local ok, charted = pcall(function() return force.is_chunk_charted(surface, { cx, cy }) end)
+        known = ok and charted
+      end
+      if known and surface.is_chunk_generated({ cx, cy }) then out[#out + 1] = { cx, cy } end
+    end
+  end
+  return out
 end
 
 -- Called from control.lua every UPDATE_TICKS for all our characters.
