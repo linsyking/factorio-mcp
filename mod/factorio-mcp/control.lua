@@ -19,6 +19,7 @@ local events = require("scripts.events")
 local vision = require("scripts.vision")
 local stats = require("scripts.stats")
 local route = require("scripts.route.api")
+local follow = require("scripts.follow")
 
 local PROTOCOL_VERSION = 6
 
@@ -104,6 +105,8 @@ script.on_nth_tick(vision.UPDATE_TICKS, function()
   vision.update(companion.entities())
 end)
 script.on_event(defines.events.on_tick, tasks.on_tick)
+script.on_nth_tick(follow.CHECK_TICKS, follow.on_check)
+follow.register_commands()
 script.on_event(defines.events.on_script_path_request_finished, walk.on_path_finished)
 script.on_event(defines.events.on_entity_damaged, events.on_entity_damaged,
   { { filter = "type", type = "character" } })

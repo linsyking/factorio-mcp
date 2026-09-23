@@ -85,12 +85,12 @@ Claude Code (`.mcp.json` in the project), one entry per agent:
 
 Without a native MCP client, `factorio-mcp call TOOL '{json}' TOOL2 …` runs tool calls through a real MCP client session.
 
-## Tools (46)
+## Tools (47)
 
 | Group | Tools |
 |---|---|
 | Session | `status` |
-| Perception | `look_around`, `check_inventory`, `inspect_entity` (up to 16 at once), `scan_area` (ASCII grid, `?` = unexplored), `describe_prototype`, `analyze_factory`, `can_place` (up to 24 at once), `find_buildable_area`, `production_stats` (items and fluids, 5s–1000h windows), `list_trains` |
+| Perception | `map_overview` (the map screen: patches, rocks, water, enemy bases on all known ground, up to 640 tiles), `look_around` (up to 150 tiles), `check_inventory`, `inspect_entity` (up to 16 at once), `scan_area` (ASCII grid, `?` = unexplored, radius up to 120, downsampled above 40), `describe_prototype`, `analyze_factory`, `can_place` (up to 24 at once), `find_buildable_area`, `production_stats` (items and fluids, 5s–1000h windows), `list_trains` |
 | Blueprints | `list_blueprints`, `read_blueprint`, `import_blueprint`, `export_blueprint` (explored area → string), `build_blueprint` (string or carried, up to 1000 entities) |
 | Chat and events | `read_chat`, `get_events`, `wait_for_events` (long-poll), `say` |
 | Instant actions | `start_research`, `equip`, `exit_vehicle`, `set_train_schedule`, `respawn` |
@@ -130,6 +130,16 @@ Other conventions:
 - The (tile, direction) state space and the underground-edge model follow [Factorio-SAT](https://github.com/R-O-C-K-E-T/Factorio-SAT)'s belt-routing encoding (GPL-3.0).
 
 This is a personal research project and is not distributed. The router's Lua is our own code, written from those designs; where the designs are GPL-3.0, treat `mod/factorio-mcp/scripts/route/` as GPL-3.0-or-later.
+
+## Watching agents in game
+
+Any player can type these in chat. They're a viewing aid for people; agents never see them.
+
+| Command | Effect |
+|---|---|
+| `/follow [name]` | Remote view that stays centred on the agent. It re-centres after the agent respawns or when you pan away; Esc stops it. With one agent the name is optional. |
+| `/follow-cam [name]` | A camera window that follows the agent while you keep playing. |
+| `/unfollow` | Stop both. |
 
 ## Tests
 

@@ -39,6 +39,7 @@ factorio-mcp is a fork of **[matteomekhail/Agentic-Factorio](https://github.com/
 - **News footer:** every tool result ends with finished or failed jobs, events and unread chat since the previous call.
 
 - **Build checks** (`checks.py`, `layout_context` RPC): belt-flow and inserter-end warnings in `build_plan`, `drop_to` / `pickup_from` for inserters, arrows for belts in `scan_area`.
+- **A bigger view:** `map_overview` (chunk-resolution map of all known ground). Agents start knowing ±200 tiles around spawn, like a new freeplay player (mod setting `factorio-mcp-start-area`). `look_around` goes to 150 tiles, `scan_area` to radius 120 (downsampled), and `mine`'s search to 200.
 - **Belt lanes:** `inspect_entity` on a belt reports each lane (left/right of travel, with the compass side).
 - **Optional jobs, stop-on-failure batches, per-step `run_plan` results, strict tool arguments.**
 - **Engine mining:** hand-mining uses the engine's own mining (selected entity + `mining_state`). The character shows the mining animation, and timing and production statistics are vanilla. A script timer is the fallback when the engine can't be pointed at exactly the target.

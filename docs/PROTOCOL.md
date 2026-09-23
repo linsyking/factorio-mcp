@@ -89,6 +89,12 @@ Task types:
 
 Every task with a map target walks within reach first, and each movement goal is checked against the exploration rule.
 
+### Map overview
+
+`map_overview {center?, radius≤640}` visits every KNOWN chunk in the square once. It counts resources by name, rocks, trees, water tiles and enemy spawners and worms, then groups each category into 4-connected chunk components. It returns `{known_chunks, total_chunks, groups: [{kind, count, chunks, center, at, area, distance}], more}`, nearest first (at most 60). `at` is a real tile of the patch.
+
+**Starting area:** when an agent character first spawns or binds, the force's explored set gains every chunk within `factorio-mcp-start-area` tiles (default 200) of spawn, the area freeplay charts for a new player.
+
 ### Build checks
 
 `layout_context {area: [x1, y1, x2, y2], points: [{x, y}, …]}` returns `{belts: [{x, y, direction, type, name, underground_type?}], at: [name | "nothing" | "unexplored"]}`. It's read-only and uses known ground only (at most 200×200 tiles, 400 points).
