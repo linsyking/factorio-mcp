@@ -95,6 +95,7 @@ remote.add_interface("factorio_mcp", {
 local function initialize()
   state.init()
   companion.normalize_all()
+  pcall(follow.migrate)
 end
 
 script.on_init(initialize)

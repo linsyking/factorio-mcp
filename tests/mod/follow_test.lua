@@ -132,6 +132,16 @@ check(a.status.caption:find("now mining", 1, true) ~= nil, "follow-cams: status 
 bodies.third = { valid = true, unit_number = 13, position = { x = 2, y = 2 }, surface = { index = 1 } }
 follow.on_check()
 check(screen["factorio_mcp_cam_a_third"] ~= nil, "follow-cams: a new agent gets its own window")
+bodies.beta = { valid = true, unit_number = 14, position = { x = 3, y = 3 }, surface = { index = 1 } }
+follow.on_check()
+local spots, overlap = {}, false
+for _, win in ipairs(windows()) do
+  local k = win.location[1] .. "," .. win.location[2]
+  if spots[k] then overlap = true end
+  spots[k] = true
+end
+check(screen["factorio_mcp_cam_a_beta"] ~= nil and not overlap,
+  "follow-cams: a new agent (even sorting first) opens in a free spot, not on top of another window")
 follow.start(player, nil, "cams")
 check(#windows() == 0 and storage.followers[1] == nil, "follow-cams: running it again closes all")
 follow.start(player, nil, "cams")

@@ -147,15 +147,27 @@ local function sync_cams(player, entry)
   local want = {}
   entry.closed = entry.closed or {}
   entry.windows = entry.windows or {}
-  local n = 0
+  -- a new window takes the first grid slot no open window was given
+  entry.slots = entry.slots or {}
+  local used = {}
+  for wname, i in pairs(entry.slots) do
+    if screen[wname] then used[i] = true else entry.slots[wname] = nil end
+  end
+  local function free_slot()
+    local i = 1
+    while used[i] do i = i + 1 end
+    used[i] = true
+    return i
+  end
   for _, t in ipairs(targets(player)) do
     if not entry.closed[t.key] then
-      n = n + 1
       local wname = WIN_PREFIX .. t.key
       want[wname] = true
       local frame = screen[wname]
       if not frame then
-        open_window(player, wname, t.title, t.entity, t.agent, slot(player, n))
+        local i = free_slot()
+        entry.slots[wname] = i
+        open_window(player, wname, t.title, t.entity, t.agent, slot(player, i))
       else
         if frame.cam and frame.cam.entity ~= t.entity then frame.cam.entity = t.entity end
         if t.agent and frame.status then frame.status.caption = status.line(t.agent) end
@@ -188,7 +200,7 @@ function M.start(player, name, mode)
   if mode == "cams" then
     if entry.cams then
       close_windows(player, true)
-      entry.cams, entry.windows, entry.closed = nil, nil, nil
+      entry.cams, entry.windows, entry.closed, entry.slots = nil, nil, nil, nil
     else
       entry.cams, entry.windows, entry.closed = true, {}, {}
       sync_cams(player, entry)
@@ -294,6 +306,16 @@ function M.on_check()
       end
       if entry.cams then sync_cams(player, entry) end
       tidy(s, index)
+    end
+  end
+end
+
+-- On mod updates: remove windows of earlier versions (0.2.5/0.2.6 names).
+function M.migrate()
+  for _, player in pairs(game.players) do
+    for _, old_name in ipairs({ "factorio_mcp_follow_cams", "factorio_mcp_follow_cam" }) do
+      local w = player.gui.screen[old_name]
+      if w then w.destroy() end
     end
   end
 end
