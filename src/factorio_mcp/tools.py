@@ -490,6 +490,13 @@ def register(app: MCPServer, game: Game) -> None:
 
     # --------------------------------------------------- instant actions
 
+    @tool("Show people watching a short line about what you are doing (up to 120 characters). It appears under "
+          "your character's name in the game and under your camera in /follow-cam and /follow-cams, followed by what "
+          "your character is doing right now. It replaces the previous line; an empty text clears it.")
+    async def set_status(text: Annotated[str, Field(max_length=120)] = "") -> str:
+        r = await game.call("set_status", {"text": text})
+        return "Status cleared." if r.get("cleared") else f"Status: {r.get('status')}"
+
     @tool("Say something in game chat as your character.")
     async def say(text: Annotated[str, Field(min_length=1, max_length=400)]) -> str:
         await game.call("say", {"text": text})
