@@ -128,11 +128,13 @@ function M.scan_area(params)
   -- Arrow keys are only listed when a belt is on screen.
   local arrows_used = {}
 
-  -- Letters are remembered per character, so the same building/resource
-  -- keeps its symbol across scans (storage.scan_letters[character][name]).
+  -- Letters are remembered per force, so the same building/resource keeps its
+  -- symbol across scans and is the same letter for every agent of the force
+  -- (storage.scan_letters["force:<name>"][name]).
   storage.scan_letters = storage.scan_letters or {}
-  local mine = storage.scan_letters[companion.context()] or {}
-  storage.scan_letters[companion.context()] = mine
+  local fkey = "force:" .. c.force.name
+  local mine = storage.scan_letters[fkey] or {}
+  storage.scan_letters[fkey] = mine
   local taken = {}
   for n, ch in pairs(mine) do taken[ch] = n end
   local function letter_for(name, alphabet)
@@ -305,7 +307,7 @@ function M.scan_area(params)
     inserters = inserters,
     note = "tile at grid[row][col] = map (origin.x+col, origin.y+row); rows run north to south."
       .. " Your force's buildings cover their whole footprint; other entities mark their center tile."
-      .. " Letters stay the same for you across scans.",
+      .. " Letters stay the same across scans and for every agent of your force.",
   }
 end
 
@@ -716,6 +718,35 @@ local function describe_entity(ent, item_name)
 
   ok, v = pcall(function() return ent.belt_speed end)
   if ok and type(v) == "number" then out.belt_speed = v end
+
+  -- Fluid connections for the entity facing north: where a pipe must sit
+  -- (offset from the entity's centre) and which way fluid may flow. Rotate
+  -- the offsets with the entity's facing.
+  pcall(function()
+    local fbs = ent.fluidbox_prototypes
+    if not fbs or #fbs == 0 then return end
+    local conns = {}
+    for i, fb in ipairs(fbs) do
+      for _, pc in ipairs(fb.pipe_connections or {}) do
+        local at = pc.positions and pc.positions[1]
+        if at then
+          local d = pc.direction or 0
+          local u = ({ [0] = { 0, -1 }, [4] = { 1, 0 }, [8] = { 0, 1 }, [12] = { -1, 0 } })[d] or { 0, 0 }
+          conns[#conns + 1] = {
+            fluidbox = i,
+            role = fb.production_type,          -- "input", "output", "input-output" or "none"
+            filter = fb.filter and fb.filter.name or nil,
+            flow = pc.flow_direction,           -- "input", "output" or "input-output"
+            type = pc.connection_type,          -- "normal" or "underground"
+            at = { x = at.x, y = at.y },        -- the entity's own connection tile
+            pipe_at = { x = at.x + u[1], y = at.y + u[2] }, -- where the pipe goes
+            side = ({ [0] = "north", [4] = "east", [8] = "south", [12] = "west" })[d],
+          }
+        end
+      end
+    end
+    if #conns > 0 then out.fluid_connections = conns end
+  end)
 
   return out
 end

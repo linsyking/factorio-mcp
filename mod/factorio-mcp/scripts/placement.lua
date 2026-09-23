@@ -91,6 +91,24 @@ function M.explain(c, entity_name, pos, direction)
     return string.format("blocked by %s at (%.1f, %.1f)", blocker.name, blocker.position.x, blocker.position.y)
       .. (me and "; your character is standing in the footprint too" or "")
   end
+  if proto.type == "offshore-pump" then
+    -- Its footprint is meant to reach over water, so the generic water
+    -- message would mislead. Say which directions would work here.
+    local ok_dirs = {}
+    for _, d in ipairs({ 0, 4, 8, 12 }) do
+      local fits = false
+      pcall(function()
+        fits = surface.can_place_entity({ name = entity_name, position = pos, direction = d, force = c.force,
+          build_check_type = defines.build_check_type.manual })
+      end)
+      if fits then ok_dirs[#ok_dirs + 1] = ({ [0] = "north (0)", [4] = "east (4)", [8] = "south (8)", [12] = "west (12)" })[d] end
+    end
+    if #ok_dirs > 0 then
+      return "an offshore pump fits here only facing " .. table.concat(ok_dirs, " or ")
+    end
+    return "an offshore pump needs a shore spot: land tiles behind it and water under its intake, "
+      .. "in some direction — none of the 4 directions fits here; move along the shore"
+  end
   if touches_water(surface, area) then
     return "the footprint touches water"
   end
@@ -101,9 +119,6 @@ function M.explain(c, entity_name, pos, direction)
       return string.format("no resource this drill can mine under its %gx%g mining area at (%.1f, %.1f)",
         side, side, pos.x, pos.y)
     end
-  end
-  if proto.type == "offshore-pump" then
-    return "an offshore pump must stand on the shore with its intake over water"
   end
   if me then
     return "your character is standing in the footprint"

@@ -104,6 +104,14 @@ The server combines it with the plan's own entities (`checks.py`):
 - belts facing each other;
 - each inserter's pickup and drop entity, with a warning when it picks from nothing or from a chest placed in the same plan.
 
+### Idempotent enqueue
+
+`enqueue {…, request_id}`: the mod remembers each `request_id` for 5 minutes. A repeat (the client retrying after a lost reply) returns the job the first attempt created, with `duplicate: true`. The server sends a fresh `request_id` with every enqueue.
+
+### wait_until
+
+`{type: "wait_until", seconds}`, `{type: "wait_until", item, count, at?}` or `{type: "wait_until", research}`, plus an optional `timeout_s` (default 300). Checked every 30 ticks. It fails with "timed out waiting for …" when the time runs out.
+
 ### Optional jobs
 
 `enqueue {…, optional: true}`:

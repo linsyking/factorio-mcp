@@ -11,6 +11,7 @@ import asyncio
 import json
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +19,18 @@ from .rcon import RconClient, RconError
 
 PROTOCOL_VERSION = 6
 UNSCOPED = {"ping", "echo", "get_chunk", "bind"}
+# Safe to send again when the reply was lost: they change nothing, or they
+# are idempotent (enqueue carries a request_id the mod de-duplicates).
+# get_chat/get_events are not: they advance read cursors.
+RETRY_SAFE = {
+    "ping", "echo", "get_chunk", "bind", "heartbeat", "set_status", "enqueue",
+    "get_state", "check_inventory", "inspect", "analyze_factory", "scan_area", "can_place",
+    "find_buildable_area", "describe_prototype", "production_stats", "list_trains", "list_blueprints",
+    "read_blueprint", "import_blueprint", "export_blueprint", "route_belt", "route_pipe", "get_task",
+    "list_tasks", "layout_context", "map_overview",
+}
+# Waits between attempts after a connection failure: covers a server restart (~15 s).
+RETRY_DELAYS_S = (0.5, 2.0, 5.0, 10.0)
 TERMINAL = {"done", "failed", "cancelled"}
 
 
@@ -58,20 +71,38 @@ class Bridge:
         self.rcon = rcon
         self.character = character
         self.session = session or uuid.uuid4().hex
+        # Set by Game: re-bind after the binding was lost (taken over, lease
+        # expired, the other session ended). Scoped calls then retry once.
+        self.rebind: Callable[[], Awaitable[None]] | None = None
 
     # ------------------------------------------------------------ transport
 
-    async def call(self, method: str, params: dict[str, Any] | None = None) -> Any:
+    async def _exec(self, method: str, cmd: str) -> str:
+        """Runs one RPC command. After a dropped connection it retries when that
+        is safe: always if the command never reached the server, otherwise only
+        for RETRY_SAFE methods."""
+        attempt = 0
+        while True:
+            try:
+                return (await self.rcon.exec(cmd)).strip()
+            except RconError as e:
+                safe = (not e.sent) or method in RETRY_SAFE
+                if not safe or attempt >= len(RETRY_DELAYS_S):
+                    if e.sent:
+                        raise ModError(f"{e} — the connection dropped after the command was sent, so it may or may "
+                                       f"not have run; check (job_status, check_inventory) before repeating it") from e
+                    raise ModError(str(e)) from e
+                await asyncio.sleep(RETRY_DELAYS_S[attempt])
+                attempt += 1
+
+    async def call(self, method: str, params: dict[str, Any] | None = None, _rebound: bool = False) -> Any:
         body = dict(params or {})
         if method not in UNSCOPED:
             body["companion"] = self.character
             body["session"] = self.session
         payload = escape_lua_string(json.dumps(body, separators=(",", ":")))
         cmd = f'/silent-command remote.call("factorio_mcp","rpc","{method}","{payload}")'
-        try:
-            raw = (await self.rcon.exec(cmd)).strip()
-        except RconError as e:
-            raise ModError(str(e)) from e
+        raw = await self._exec(method, cmd)
         if not raw:
             raise ModError(
                 "empty response from the game — is the factorio-mcp mod installed and enabled on the server?"
@@ -84,7 +115,14 @@ class Bridge:
                 assembled += chunk["data"]
             env = parse_envelope(assembled)
         if not env.get("ok"):
-            raise ModError(str(env.get("error") or "unknown mod error"))
+            err = str(env.get("error") or "unknown mod error")
+            # The binding check runs before the handler, so nothing happened:
+            # bind again and repeat the call once.
+            if (not _rebound and self.rebind is not None and method not in UNSCOPED
+                    and "does not hold character" in err):
+                await self.rebind()
+                return await self.call(method, params, _rebound=True)
+            raise ModError(err)
         return env.get("data") or {}
 
     async def unlock(self) -> dict[str, Any]:
@@ -125,7 +163,8 @@ class Bridge:
         chain: str | None = None,
         optional: bool = False,
     ) -> dict[str, Any]:
-        params: dict[str, Any] = {"task": task, "replace": replace, "quiet": quiet}
+        params: dict[str, Any] = {"task": task, "replace": replace, "quiet": quiet,
+                                  "request_id": uuid.uuid4().hex}
         if chain:
             params["chain"] = chain
         if optional:

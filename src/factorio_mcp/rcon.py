@@ -22,7 +22,11 @@ MAX_PACKET = 8 * 1024 * 1024
 
 
 class RconError(Exception):
-    pass
+    """sent=True: the command reached the server, so it may have run."""
+
+    def __init__(self, message: str, sent: bool = False):
+        super().__init__(message)
+        self.sent = sent
 
 
 def encode_packet(req_id: int, kind: int, body: str) -> bytes:
@@ -108,7 +112,7 @@ class RconClient:
             except (asyncio.TimeoutError, asyncio.IncompleteReadError, OSError) as e:
                 # The stream position is unknown now — drop the connection.
                 self.close()
-                raise RconError(f"RCON command failed: {e!r}") from e
+                raise RconError(f"RCON command failed: {e!r}", sent=True) from e
             return body.decode("utf-8", errors="replace")
 
     def close(self) -> None:

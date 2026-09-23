@@ -106,6 +106,8 @@ def inspect(e: dict[str, Any]) -> str:
     parts = []
     facing = f", facing {dir_name(e['direction'])}" if e.get("direction") is not None else ""
     parts.append(f"{e['name']} ({e.get('type')}) at ({e['position']['x']}, {e['position']['y']}){facing}.")
+    if e.get("note"):
+        parts.append(f"NOTE: {e['note']}.")
     if e.get("health") is not None:
         parts.append(f"Health {e['health']}.")
     if e.get("status"):
@@ -137,6 +139,14 @@ def inspect(e: dict[str, Any]) -> str:
                          f"{f' ({ls} side)' if ls else ''}: {left}; right lane{f' ({rs} side)' if rs else ''}: {right}.")
         else:
             parts.append(f"On the belt: {items_text(bc)}." if bc else "Nothing on the belt.")
+    if e.get("fluid_connections"):
+        fc = []
+        for c in as_list(e["fluid_connections"]):
+            where = f"({c['pipe_at']['x']}, {c['pipe_at']['y']})"
+            state = f"connected to {c['connected_to']}" if c.get("connected_to") else "NOT connected"
+            fc.append(f"box {c['fluidbox']} {c.get('flow')}{' underground' if c.get('type') == 'underground' else ''} "
+                      f"at {where}: {state}")
+        parts.append("Fluid connections: " + "; ".join(fc) + ".")
     if e.get("fluids"):
         parts.append("Fluids: " + ", ".join(f"{n} {num(q)}" for n, q in e["fluids"].items()) + ".")
     if e.get("no_fluids"):
@@ -213,6 +223,14 @@ def _entity_text(name: str, p: dict[str, Any]) -> str:
         bits.append("mines: " + ", ".join(as_list(p["resource_categories"])))
     if p.get("drop_offset"):
         bits.append(f"drops output at offset {_offset(p['drop_offset'])} when facing north (rotates with direction)")
+    fc = p.get("fluid_connections")
+    if fc:
+        parts_fc = []
+        for c in as_list(fc):
+            what = c.get("filter") or ("fluid" if c.get("role") in (None, "none") else c.get("role"))
+            parts_fc.append(f"{c.get('side')} side pipe at {_offset(c['pipe_at'])} ({c.get('flow')}"
+                            f"{', underground' if c.get('type') == 'underground' else ''}; box {c['fluidbox']} {what})")
+        bits.append("fluid connections when facing north (rotate with direction): " + "; ".join(parts_fc))
     if p.get("inserter_pickup_offset") and p.get("inserter_drop_offset"):
         bits.append(f"picks up at {_offset(p['inserter_pickup_offset'])}, drops at {_offset(p['inserter_drop_offset'])} "
                     "when facing north (rotate with direction)")

@@ -71,7 +71,8 @@ function M.insert.tick(task)
   if type(reached) == "table" then return reached end
   if reached ~= "ok" then return nil end
 
-  local e = approach.find_entity_near(c, task.target)
+  local e, pick_note = approach.find_entity_near(c, task.target)
+  task._pick_note = pick_note
   if not e then return no_entity(task, "insert into") end
 
   local moved, problems, total = {}, {}, 0
@@ -211,7 +212,8 @@ function M.extract.tick(task)
   if type(reached) == "table" then return reached end
   if reached ~= "ok" then return nil end
 
-  local e = approach.find_entity_near(c, task.target)
+  local e, pick_note = approach.find_entity_near(c, task.target)
+  task._pick_note = pick_note
   if not e then return no_entity(task, "extract from") end
 
   if task._all then

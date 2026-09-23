@@ -46,6 +46,7 @@ class Game:
         self._bound: dict[str, Any] | None = None
         self._lock = asyncio.Lock()
         self._queue: str | None = None
+        self._bridge.rebind = self._rebind
 
     # The job queue: every job this character is given joins one chain, so a
     # failure cancels everything queued behind it (the mod does the
@@ -122,6 +123,14 @@ class Game:
 
     def lost_binding(self) -> None:
         self._bound = None
+
+    async def _rebind(self) -> None:
+        """The mod no longer knows this session (someone else took the character,
+        or our lease lapsed): bind again. Fails loudly when another live session
+        holds the character and takeover isn't configured."""
+        log.info("binding for %s was lost; binding again", self.cfg.character)
+        self.lost_binding()
+        await self.bridge()
 
     async def call(self, method: str, params: dict[str, Any] | None = None) -> Any:
         b = await self.bridge()

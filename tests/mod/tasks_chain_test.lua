@@ -28,7 +28,7 @@ local runner = {
 runner.place, runner.rotate, runner.set_recipe = runner, runner, runner
 runner.insert, runner.extract, runner.deliver = runner, runner, runner
 for _, m in ipairs({ "walk", "follow", "mine", "build", "craft", "transfer", "refuel",
-  "drive", "build_plan", "deconstruct", "fight", "defend", "build_blueprint" }) do
+  "drive", "build_plan", "deconstruct", "fight", "defend", "build_blueprint", "wait_until" }) do
   package.loaded["scripts.actions." .. m] = runner
 end
 
@@ -93,6 +93,15 @@ do -- an optional step is still cancelled when an earlier required step fails
   local b = tasks.enqueue({ task = { type = "walk_to" }, background = true, chain = "req", optional = true })
   tasks.on_tick()
   check(status_of(a.task_id) == "failed" and status_of(b.task_id) == "cancelled", "optional: cancelled by an earlier failure")
+end
+
+do -- a repeated request_id (lost reply, client retried) returns the first job instead of a second one
+  local a = tasks.enqueue({ task = { type = "walk_to" }, background = true, chain = "rid", request_id = "req-1" })
+  local b = tasks.enqueue({ task = { type = "walk_to" }, background = true, chain = "rid", request_id = "req-1" })
+  check(b.duplicate == true and b.task_id == a.task_id, "request_id: a retried enqueue returns the same job")
+  local c = tasks.enqueue({ task = { type = "walk_to" }, background = true, chain = "rid", request_id = "req-2" })
+  check(c.task_id ~= a.task_id and not c.duplicate, "request_id: a new request makes a new job")
+  tasks.on_tick() tasks.on_tick()
 end
 
 print(failures == 0 and "\nALL TESTS PASSED" or ("\n" .. failures .. " FAILURES"))

@@ -16,8 +16,9 @@ from factorio_mcp.rcon import RconClient, RconError
 class FakeFactorio:
     """Minimal Source-RCON server. `handler(method, params) -> envelope dict`."""
 
-    def __init__(self, handler, password="pw", noise=True):
+    def __init__(self, handler, password="pw", noise=True, drop_first=0):
         self.handler, self.password, self.noise = handler, password, noise
+        self.drop_first = drop_first  # close the connection on the first N commands, without replying
         self.commands: list[str] = []
         self.server = None
 
@@ -45,6 +46,10 @@ class FakeFactorio:
                     writer.write(self._packet(req_id if body == self.password else -1, 2, b""))
                 else:
                     self.commands.append(body)
+                    if self.drop_first > 0:
+                        self.drop_first -= 1
+                        writer.close()
+                        return
                     if self.noise:  # a reply to some other id must be ignored
                         writer.write(self._packet(req_id + 1000, 0, b"stray"))
                     writer.write(self._packet(req_id, 0, self._respond(body).encode()))
@@ -157,3 +162,51 @@ async def test_concurrent_clients_do_not_mix_replies(fake):
     results = await asyncio.gather(*(run(b) for b in bridges))
     for i, r in enumerate(results):
         assert r == [f"agent-{i}"] * 10
+
+
+async def test_lost_binding_rebinds_and_retries_once(fake):
+    state = {"bound": False, "calls": 0}
+
+    def handler(method, params):
+        if method == "get_state":
+            state["calls"] += 1
+            if not state["bound"]:
+                return {"ok": False, "error": "this MCP session does not hold character 'scout-1'"}
+            return {"ok": True, "data": {"fine": True}}
+        return {"ok": True, "data": {}}
+
+    f, port = await fake(handler)
+    b = Bridge(RconClient("127.0.0.1", port, "pw"), "scout-1", "session-1234")
+
+    async def rebind():
+        state["bound"] = True
+
+    b.rebind = rebind
+    assert (await b.call("get_state"))["fine"] is True
+    assert state["calls"] == 2  # one refused, one after re-binding
+
+
+async def test_dropped_connection_retries_safe_calls_only(fake, monkeypatch):
+    import factorio_mcp.bridge as bridge_mod
+    monkeypatch.setattr(bridge_mod, "RETRY_DELAYS_S", (0.01, 0.01))
+    f, port = await fake(lambda m, p: {"ok": True, "data": {"m": m}}, drop_first=1)
+    b = Bridge(RconClient("127.0.0.1", port, "pw", timeout_s=2), "scout-1", "session-1234")
+    assert (await b.call("get_state"))["m"] == "get_state"  # read-only: retried after the drop
+
+    f2, port2 = await fake(lambda m, p: {"ok": True, "data": {}}, drop_first=1)
+    b2 = Bridge(RconClient("127.0.0.1", port2, "pw", timeout_s=2), "scout-1", "session-1234")
+    with pytest.raises(ModError, match="may or may not have run"):
+        await b2.call("say", {"text": "hi"})  # has side effects: not repeated blindly
+
+
+async def test_enqueue_carries_a_request_id(fake):
+    seen = {}
+
+    def handler(method, params):
+        seen.update(params)
+        return {"ok": True, "data": {"task_id": 1}}
+
+    f, port = await fake(handler)
+    b = Bridge(RconClient("127.0.0.1", port, "pw"), "scout-1", "session-1234")
+    await b.enqueue({"type": "walk_to"})
+    assert len(seen.get("request_id", "")) == 32

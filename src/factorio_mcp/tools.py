@@ -75,9 +75,13 @@ class BuildStep(BaseModel):
 
 
 class PlanStep(BaseModel):
-    type: Literal["craft", "insert", "extract", "mine", "place", "set_recipe", "rotate", "walk_to"]
-    recipe: str | None = None
-    count: int | None = Field(None, ge=1, le=200)
+    type: Literal["craft", "insert", "extract", "mine", "place", "set_recipe", "rotate", "walk_to", "wait_until"]
+    recipe: str | None = Field(None, description="craft: the recipe to craft; place / set_recipe: the recipe to set on the machine")
+    count: int | None = Field(None, ge=1, le=10000, description="craft: recipe executions (a belt craft makes 2); "
+                              "mine: mining operations; wait_until: the item count to wait for")
+    seconds: float | None = Field(None, ge=0, le=3600, description="wait_until: wait this long")
+    research: str | None = Field(None, description="wait_until: wait until this technology is researched")
+    timeout_s: float | None = Field(None, ge=1, le=3600, description="wait_until: fail after this long (default 300)")
     x: float | None = None
     y: float | None = None
     items: dict[str, int] | None = None
@@ -455,6 +459,14 @@ def register(app: MCPServer, game: Game) -> None:
     def chat_lines(msgs: list[dict[str, Any]]) -> str:
         return "\n".join(f"[chat #{m['id']}] <{m['player']}{' (agent)' if m.get('bot') else ''}> {m['text']}" for m in msgs)
 
+    def acknowledge(evs: list[dict[str, Any]]) -> str:
+        """A job_failed event shown to the agent counts as acknowledged: the next
+        job starts a new queue instead of being refused."""
+        if any(e.get("kind") == "job_failed" for e in evs):
+            game.new_queue()
+            return "\n(Jobs queued after the failed job were cancelled. Your next job starts a new queue.)"
+        return ""
+
     def event_lines(evs: list[dict[str, Any]]) -> str:
         return "\n".join(f"[event #{e['id']} {e['kind']}] {e['text']}" for e in evs)
 
@@ -472,7 +484,7 @@ def register(app: MCPServer, game: Game) -> None:
         b = await game.bridge()
         r = await b.read_events(since_id)
         evs = as_list(r.get("events"))
-        return event_lines(evs[-50:]) if evs else f"No new events (last id {r.get('last_id')})."
+        return (event_lines(evs[-50:]) + acknowledge(evs)) if evs else f"No new events (last id {r.get('last_id')})."
 
     @tool("Block until new chat or a new event arrives (returns as soon as anything arrives), or timeout_s passes. "
           "Use one wait per call and react to what it returns.")
@@ -483,7 +495,7 @@ def register(app: MCPServer, game: Game) -> None:
             chat = as_list((await b.read_chat()).get("messages"))
             evs = as_list((await b.read_events()).get("events"))
             if chat or evs:
-                return "\n".join(x for x in (chat_lines(chat), event_lines(evs)) if x)
+                return "\n".join(x for x in (chat_lines(chat), event_lines(evs)) if x) + acknowledge(evs)
             if time.monotonic() >= deadline:
                 return f"Nothing new in {timeout_s:g}s."
             await asyncio.sleep(0.5)
@@ -570,7 +582,9 @@ def register(app: MCPServer, game: Game) -> None:
         return await run_job({"type": "place", "item": item, "position": {"x": x, "y": y}, "direction": direction,
                               "underground_type": underground_type}, wait_s, replace)
 
-    @tool("Hand-craft with your character's crafting queue (real crafting time; missing intermediates are queued too).")
+    @tool("Hand-craft with your character's crafting queue (real crafting time; missing intermediates are queued too). "
+          "count is the number of recipe executions: one transport-belt craft makes 2 belts, one copper-cable craft "
+          "makes 2 cables.")
     async def craft_items(recipe: str, count: Annotated[int, Field(ge=1, le=100)] = 1,
                           wait_s: WaitS = None, replace: Replace = False) -> str:
         return await run_job({"type": "craft", "recipe": recipe, "count": count}, wait_s, replace)
@@ -588,6 +602,29 @@ def register(app: MCPServer, game: Game) -> None:
             raise ValueError("pass items with counts, or all=true")
         return await run_job({"type": "extract", "target": {"x": x, "y": y}, "items": items, "all": all}, wait_s, replace,
                              optional)
+
+    @tool("Queue a job that waits until a condition holds, so the jobs queued after it don't race the game "
+          "(smelting not finished yet, research not done yet). Give exactly one: seconds; or item (with count) in "
+          "the entity at x,y, or in your own inventory without x,y; or research (a technology name). It fails "
+          "after timeout_s (default 300), and like any failure that cancels the jobs queued after it.")
+    async def wait_until(seconds: Annotated[float | None, Field(ge=0, le=3600)] = None,
+                         item: str | None = None, count: Annotated[int, Field(ge=1, le=100000)] = 1,
+                         x: float | None = None, y: float | None = None, research: str | None = None,
+                         timeout_s: Annotated[float, Field(ge=1, le=3600)] = 300,
+                         wait_s: WaitS = None, replace: Replace = False) -> str:
+        if sum(v is not None for v in (seconds, item, research)) != 1:
+            raise ValueError("give exactly one of seconds, item or research")
+        task: dict[str, Any] = {"type": "wait_until", "timeout_s": timeout_s}
+        if seconds is not None:
+            task["seconds"] = seconds
+        elif research is not None:
+            task["research"] = research
+        else:
+            task["item"], task["count"] = item, count
+            at = xy(x, y, "entity to watch")
+            if at:
+                task["at"] = at
+        return await run_job(task, wait_s, replace)
 
     @tool("Set the recipe of the crafting machine at x,y (walks within reach).")
     async def set_recipe(x: Coord, y: Coord, recipe: str, wait_s: WaitS = None, replace: Replace = False) -> str:
@@ -734,7 +771,7 @@ def register(app: MCPServer, game: Game) -> None:
                 d["direction"] = resolve_direction(s.x, s.y, s.direction, s.drop_to, s.pickup_from)
             x, y = d.pop("x", None), d.pop("y", None)
             if x is not None and y is not None:
-                d["position" if s.type == "place" else "target"] = {"x": x, "y": y}
+                d["position" if s.type == "place" else ("at" if s.type == "wait_until" else "target")] = {"x": x, "y": y}
             r = await b.enqueue(d, replace=replace and i == 0, quiet=i < len(steps) - 1, chain=chain, optional=optional)
             if r.get("cancelled"):
                 if not ids:

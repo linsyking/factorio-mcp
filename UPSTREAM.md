@@ -45,6 +45,18 @@ factorio-mcp is a fork of **[matteomekhail/Agentic-Factorio](https://github.com/
 - **Optional jobs, stop-on-failure batches, per-step `run_plan` results, strict tool arguments.**
 - **Engine mining:** hand-mining uses the engine's own mining (selected entity + `mining_state`). The character shows the mining animation, and timing and production statistics are vanilla. A script timer is the fallback when the engine can't be pointed at exactly the target.
 
+## Fixed from an agent's bug report (mod 0.2.9)
+
+- A `place` step's `recipe` is applied, and checked before walking. It used to be silently ignored.
+- A failure shown by `get_events` or `wait_for_events` counts as acknowledged, so the next job starts a new queue instead of being refused.
+- A map point resolves to the entity whose footprint contains it, not the nearest centre. A point on the edge between two buildings, or two batch targets hitting the same entity, is reported in the result. This applies to inspect, insert, extract, rotate and set_recipe.
+- A lost binding (after a takeover, for example) re-binds and repeats the call once. Tools that used the bridge directly used to keep failing until the next heartbeat.
+- After a dropped RCON connection, calls are retried when safe (for up to about 17 s, which covers a server restart): always if the command never reached the server, and otherwise only read-only calls and `enqueue`, which the mod de-duplicates by `request_id`. Other calls report that they "may or may not have run".
+- `describe_prototype` lists fluid connection points (side, pipe offset, flow). `inspect_entity` lists each connection's map position and whether it's connected.
+- New `wait_until` job (tool and `run_plan` step).
+- The offshore-pump placement message says which directions fit, instead of "the footprint touches water".
+- No energy value for void-powered entities; `scan_area` letters are shared by the whole force; `craft_items`' `count` is documented as recipe executions.
+
 ## Fixed after the collaboration and solo tests (research/factorio-agent/12, 13)
 
 - Whole-number positions of odd-sized entities are snapped to the tile centre (a belt at (92,−12) used to "fail unexpectedly").

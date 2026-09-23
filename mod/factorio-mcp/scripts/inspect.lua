@@ -2,6 +2,7 @@
 -- search, non-characters preferred) or by unit_number (see docs/PROTOCOL.md).
 local companion = require("scripts.companion")
 local vision = require("scripts.vision")
+local approach = require("scripts.actions.approach")
 
 local M = {}
 
@@ -153,6 +154,31 @@ local function collect_fluids(e, out)
     end
   end
   if fluids then out.fluids = fluids end
+
+  -- Where each fluid connection wants a pipe (map position), and whether
+  -- something is connected there — "no input fluid" is often a pipe on the
+  -- wrong side.
+  pcall(function()
+    local fb = e.fluidbox
+    if not fb or #fb == 0 then return end
+    local conns = {}
+    for i = 1, #fb do
+      for _, pc in ipairs(fb.get_pipe_connections(i)) do
+        if pc.connection_type ~= "linked" and pc.target_position then
+          local to
+          pcall(function() if pc.target then to = pc.target.owner.name end end)
+          conns[#conns + 1] = {
+            fluidbox = i,
+            flow = pc.flow_direction,
+            type = pc.connection_type,
+            pipe_at = { x = round1(pc.target_position.x), y = round1(pc.target_position.y) },
+            connected_to = to,
+          }
+        end
+      end
+    end
+    if #conns > 0 then out.fluid_connections = conns end
+  end)
 end
 
 local function locate(params)
@@ -178,37 +204,28 @@ local function locate(params)
 
   -- Preference order: buildings/machines > resources > characters. A chest
   -- standing on an ore tile must resolve to the chest, not the ore under it.
-  local best, best_d = nil, math.huge
-  local best_res, best_res_d = nil, math.huge
-  local best_char, best_char_d = nil, math.huge
-  for _, e in ipairs(vision.filter_perceivable(
-    surface.find_entities_filtered({ position = target, radius = SEARCH_RADIUS }), surface, c.force)) do
-    if e.valid then
-      local d = distance(e.position, target)
-      if e.type == "character" then
-        if d < best_char_d then best_char, best_char_d = e, d end
-      elseif e.type == "resource" then
-        if d < best_res_d then best_res, best_res_d = e, d end
-      elseif d < best_d then
-        best, best_d = e, d
-      end
-    end
-  end
+  local candidates = vision.filter_perceivable(
+    surface.find_entities_filtered({ position = target, radius = SEARCH_RADIUS }), surface, c.force)
+  local best, note = approach.pick_entity(candidates, target,
+    function(e) return e.type ~= "character" and e.type ~= "resource" end)
+  local best_res = approach.pick_entity(candidates, target, function(e) return e.type == "resource" end)
+  local best_char = approach.pick_entity(candidates, target, function(e) return e.type == "character" end)
   local entity = best or best_res or best_char
   if not entity then
     error(string.format(
       "nothing to inspect within %.1f tiles of (%.1f, %.1f) — check the position or look_around first",
       SEARCH_RADIUS, target.x, target.y))
   end
-  return entity
+  return entity, best and note or nil
 end
 
 local function inspect_one(params)
-  local e = locate(params)
+  local e, note = locate(params)
 
   local out = {
     name = e.name,
     type = e.type,
+    unit_number = e.unit_number,
     position = { x = round1(e.position.x), y = round1(e.position.y) },
     direction = e.direction,
   }
@@ -235,8 +252,12 @@ local function inspect_one(params)
     out.crafting_progress = round2(progress)
   end
 
-  -- Energy buffer in kJ (LuaEntity.energy is joules).
-  local ok_energy, energy = pcall(function() return e.energy end)
+  if note then out.note = note end
+  -- Energy buffer in kJ (LuaEntity.energy is joules). Entities that need no
+  -- energy (void source, e.g. the offshore pump) report a meaningless number.
+  local void = false
+  pcall(function() void = e.prototype.void_energy_source_prototype ~= nil end)
+  local ok_energy, energy = pcall(function() return (not void) and e.energy or nil end)
   if ok_energy and type(energy) == "number" and energy > 0 then
     out.energy_kj = round1(energy / 1000)
   end
@@ -300,10 +321,19 @@ function M.inspect(params)
       error("inspect takes at most " .. MAX_TARGETS .. " targets per call — split the list")
     end
     local out = {}
+    local seen = {}
     for i, t in ipairs(params.targets) do
       local ok, res = pcall(inspect_one, { position = t })
       if ok then
         out[i] = res
+        local k = res.unit_number or (res.name .. "@" .. res.position.x .. "," .. res.position.y)
+        if seen[k] then
+          res.note = (res.note and (res.note .. "; ") or "") .. string.format(
+            "target %d resolved to the same %s as target %d — the point (%s, %s) may be meant for a neighbour; "
+            .. "use a point inside it", i, res.name, seen[k], tostring(t.x), tostring(t.y))
+        else
+          seen[k] = i
+        end
       else
         out[i] = {
           error = tostring(res):gsub("^.-:%d+:%s*", ""),

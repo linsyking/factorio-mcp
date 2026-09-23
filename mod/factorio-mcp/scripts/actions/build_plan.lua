@@ -172,6 +172,8 @@ local function apply_recipe(c, e, recipe_name)
   return nil
 end
 
+M.apply_recipe = apply_recipe -- also used by the single place action
+
 -- Same rules as transfer.insert: move each requested item from the companion
 -- into the placed entity, removing exactly what was accepted. Returns a list
 -- of problem strings (empty = everything went in).

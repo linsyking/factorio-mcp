@@ -4,6 +4,7 @@ local companion = require("scripts.companion")
 local placement = require("scripts.placement")
 local items = require("scripts.items")
 local approach = require("scripts.actions.approach")
+local build_plan = require("scripts.actions.build_plan")
 
 local M = {}
 
@@ -55,6 +56,12 @@ function M.place.start(task)
   task.direction = math.floor(tonumber(task.direction) or 0) % 16
   task._entity_name = result.name
   task.position = placement.snap(result, task.position, task.direction)
+  if task.recipe ~= nil then
+    -- checked before walking, like set_recipe
+    local r = c.force.recipes[tostring(task.recipe)]
+    if not r then error("unknown recipe: '" .. tostring(task.recipe) .. "'") end
+    if not r.enabled then error("recipe " .. tostring(task.recipe) .. " isn't unlocked yet — research it first") end
+  end
 end
 
 function M.place.tick(task)
@@ -106,11 +113,20 @@ function M.place.tick(task)
     }
   end
   c.remove_item(items.spec(task.item, 1))
+  local recipe_note = ""
+  if task.recipe ~= nil and built.valid then
+    local why = build_plan.apply_recipe(c, built, tostring(task.recipe))
+    if why then
+      return { status = "failed", detail = string.format("placed %s at (%.1f, %.1f), but %s",
+        task.item, built.position.x, built.position.y, why) }
+    end
+    recipe_note = ", recipe " .. tostring(task.recipe)
+  end
   return {
     status = "done",
-    detail = string.format("placed %s at (%.1f, %.1f)%s",
+    detail = string.format("placed %s at (%.1f, %.1f)%s%s",
       task.item, built.position.x, built.position.y,
-      task.direction ~= 0 and (" facing " .. dir_name(task.direction)) or ""),
+      task.direction ~= 0 and (" facing " .. dir_name(task.direction)) or "", recipe_note),
   }
 end
 
@@ -134,7 +150,8 @@ function M.rotate.tick(task)
   if type(reached) == "table" then return reached end
   if reached ~= "ok" then return nil end
 
-  local e = approach.find_entity_near(c, task.target)
+  local e, pick_note = approach.find_entity_near(c, task.target)
+  task._pick_note = pick_note
   if not e then
     return {
       status = "failed",
@@ -183,7 +200,8 @@ function M.set_recipe.tick(task)
   if type(reached) == "table" then return reached end
   if reached ~= "ok" then return nil end
 
-  local e = approach.find_entity_near(c, task.target)
+  local e, pick_note = approach.find_entity_near(c, task.target)
+  task._pick_note = pick_note
   if not e then
     return {
       status = "failed",

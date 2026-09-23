@@ -97,18 +97,48 @@ end
 -- never apply to.
 local SKIP_TYPES = { character = true, resource = true, tree = true, ["item-entity"] = true }
 
-function M.find_entity_near(c, pos, radius)
-  local candidates = c.surface.find_entities_filtered({ position = pos, radius = radius or 1.5 })
-  local best, best_d
+-- Does the entity's footprint contain pos?
+local function covers(e, pos)
+  local ok, bb = pcall(function() return e.bounding_box end)
+  if not ok or not bb then return false end
+  local eps = 1e-3
+  return pos.x >= bb.left_top.x - eps and pos.x <= bb.right_bottom.x + eps
+    and pos.y >= bb.left_top.y - eps and pos.y <= bb.right_bottom.y + eps
+end
+
+-- Pick the entity meant by a map point from candidates: one whose footprint
+-- contains the point wins over one whose centre is merely nearer. Returns the
+-- entity and, when two footprints share the point (it is on their common
+-- edge), a note naming the other one.
+function M.pick_entity(candidates, pos, accept)
+  local inside, inside_d, near, near_d, rival
   for _, e in ipairs(candidates) do
-    if e.valid and e ~= c and not SKIP_TYPES[e.type] then
+    if e.valid and (not accept or accept(e)) then
       local d = dist_sq(e.position, pos)
-      if not best or d < best_d then
-        best, best_d = e, d
+      if covers(e, pos) then
+        if not inside or d < inside_d - 1e-6 then
+          if inside and math.abs(d - inside_d) > 1e-6 then rival = nil end
+          inside, inside_d = e, d
+        elseif math.abs(d - inside_d) <= 1e-6 then
+          rival = e
+        end
+      elseif not near or d < near_d then
+        near, near_d = e, d
       end
     end
   end
-  return best
+  local note
+  if inside and rival then
+    note = string.format("(%.1f, %.1f) is on the edge between the %s at (%.1f, %.1f) and the %s at (%.1f, %.1f); "
+      .. "took the first — use a point inside the building you mean", pos.x, pos.y, inside.name,
+      inside.position.x, inside.position.y, rival.name, rival.position.x, rival.position.y)
+  end
+  return inside or near, note
+end
+
+function M.find_entity_near(c, pos, radius)
+  local candidates = c.surface.find_entities_filtered({ position = pos, radius = radius or 1.5 })
+  return M.pick_entity(candidates, pos, function(e) return e ~= c and not SKIP_TYPES[e.type] end)
 end
 
 return M

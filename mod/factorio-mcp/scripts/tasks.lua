@@ -43,6 +43,7 @@ local runners = {
   build_blueprint = require("scripts.actions.build_blueprint"),
   deconstruct = deconstruct,
   fight = fight,
+  wait_until = require("scripts.actions.wait_until"),
 }
 
 -- One lane (queue + active) per companion; tasks in different lanes run in
@@ -80,6 +81,7 @@ local function record(task, status, detail)
 end
 
 local function finish(task, status, detail)
+  if task._pick_note then detail = (detail or "") .. " — NOTE: " .. task._pick_note end
   record(task, status, detail)
   local l = lane(task.companion or companion.DEFAULT)
   if l.active and l.active.id == task.id then
@@ -153,6 +155,14 @@ function M.enqueue(params)
   end
   local name = companion.context()
   companion.require_companion(name)
+  -- A client that lost the reply to an enqueue (dropped RCON connection) sends
+  -- the same request_id again; answer with the job the first attempt made.
+  local rid = params.request_id and tostring(params.request_id)
+  if rid then
+    storage.tasks.request_ids = storage.tasks.request_ids or {}
+    local prev = storage.tasks.request_ids[rid]
+    if prev then return { task_id = prev.task_id, companion = name, cancelled = prev.cancelled, duplicate = true } end
+  end
   if params.replace then
     cancel_lane(name)
     companion.set_context(name)
@@ -173,11 +183,13 @@ function M.enqueue(params)
   local fc = storage.tasks.failed_chains
   if task.chain and fc and fc[task.chain] then
     record(task, "cancelled", "skipped: an earlier step of the same plan failed")
+    if rid then storage.tasks.request_ids[rid] = { task_id = task.id, cancelled = true, tick = game.tick } end
     return { task_id = task.id, companion = name, cancelled = true }
   end
 
   local l = lane(name)
   l.queue[#l.queue + 1] = task
+  if rid then storage.tasks.request_ids[rid] = { task_id = task.id, tick = game.tick } end
   return { task_id = task.id, companion = name }
 end
 
@@ -279,6 +291,9 @@ local function prune_records()
     if game.tick - rec.finished_tick > RECORD_TTL_TICKS then
       t.records[id] = nil
     end
+  end
+  for rid, entry in pairs(t.request_ids or {}) do
+    if game.tick - entry.tick > RECORD_TTL_TICKS then t.request_ids[rid] = nil end
   end
   for chain, tick in pairs(t.failed_chains or {}) do
     if game.tick - tick > RECORD_TTL_TICKS then
