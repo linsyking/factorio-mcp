@@ -1,0 +1,628 @@
+"""MCP tools. Capability-only: tools describe what they do, never why or when an
+agent should use them. Every tool acts as the ONE character this MCP instance
+is bound to."""
+
+from __future__ import annotations
+
+import asyncio
+import functools
+import time
+import uuid
+from collections import Counter
+from typing import Annotated, Any, Literal
+
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from pydantic import BaseModel, Field
+
+from . import format as fmt
+from .bridge import JobResult, ModError, as_list
+from .game import Game
+
+Coord = Annotated[float, Field(description="map coordinate in tiles (x grows east, y grows south)")]
+Direction = Annotated[int, Field(ge=0, le=15, description="16-way direction: 0=north, 4=east, 8=south, 12=west")]
+Items = Annotated[
+    dict[str, int],
+    Field(description='item name -> count, e.g. {"coal": 10}; other qualities as "name@quality", e.g. "iron-plate@rare"'),
+]
+WaitS = Annotated[
+    float | None,
+    Field(ge=0, le=600, description="seconds to wait for the job to finish before returning its id (default 30; 0 = return at once)"),
+]
+Replace = Annotated[bool, Field(description="cancel your running and queued jobs first instead of queueing behind them")]
+
+
+class Point(BaseModel):
+    x: float
+    y: float
+
+
+class Placement(BaseModel):
+    item: str | None = Field(None, description="defaults to the top-level item")
+    x: float
+    y: float
+    direction: int | None = Field(None, ge=0, le=15)
+
+
+class BuildStep(BaseModel):
+    item: str = Field(description='item to place, e.g. "burner-mining-drill" (or "name@quality")')
+    x: float
+    y: float
+    direction: int | None = Field(None, ge=0, le=15)
+    recipe: str | None = Field(None, description="recipe to set on the placed machine")
+    insert: dict[str, int] | None = Field(None, description="items to move from your inventory into the placed entity")
+
+
+class PlanStep(BaseModel):
+    type: Literal["craft", "insert", "extract", "mine", "place", "set_recipe", "rotate", "walk_to"]
+    recipe: str | None = None
+    count: int | None = Field(None, ge=1, le=200)
+    x: float | None = None
+    y: float | None = None
+    items: dict[str, int] | None = None
+    all: bool | None = None
+    resource: str | None = None
+    item: str | None = None
+    direction: int | None = Field(None, ge=0, le=15)
+
+
+class TrainStop(BaseModel):
+    station: str = Field(description="exact train stop name (case matters)")
+    wait: Literal["full", "empty"] | float | None = Field(None, description='"full", "empty" or seconds (default 5)')
+
+
+def _tool_errors(fn):
+    """Game-side failures become MCP tool errors (isError) with the message."""
+
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await fn(*args, **kwargs)
+        except ToolError:
+            raise
+        except (ModError, ValueError) as e:
+            raise ToolError(str(e)) from e
+
+    return wrapper
+
+
+def register(app: MCPServer, game: Game) -> None:
+    def tool(description: str):
+        def deco(fn):
+            app.tool(name=fn.__name__, description=description)(_tool_errors(fn))
+            return fn
+
+        return deco
+
+    def wait_default(wait_s: float | None) -> float:
+        return game.cfg.default_wait_s if wait_s is None else wait_s
+
+    def describe(res: JobResult, waited: float) -> str:
+        if res.status == "done":
+            return f"Job #{res.job_id} ({res.type}) done: {res.detail}"
+        if res.status == "failed":
+            raise ToolError(f"Job #{res.job_id} ({res.type}) failed: {res.detail}")
+        if res.status == "cancelled":
+            raise ToolError(f"Job #{res.job_id} ({res.type}) was cancelled{': ' + res.detail if res.detail else ''}")
+        return (
+            f"Job #{res.job_id} ({res.type}) is still {res.status} after {waited:g}s and keeps running. "
+            f"Use job_wait / job_status with job_id={res.job_id}, or job_cancel."
+        )
+
+    async def run_job(task: dict[str, Any], wait_s: float | None, replace: bool = False) -> str:
+        b = await game.bridge()
+        r = await b.enqueue(task, replace=replace)
+        job_id = int(r["task_id"])
+        waited = wait_default(wait_s)
+        if waited <= 0:
+            return f"Job #{job_id} ({task['type']}) queued."
+        return describe(await b.wait_job(job_id, waited), waited)
+
+    def xy(x: float | None, y: float | None, what: str = "position") -> dict[str, float] | None:
+        if (x is None) != (y is None):
+            raise ValueError(f"give both x and y for the {what}, or neither")
+        return None if x is None else {"x": x, "y": y}
+
+    # ------------------------------------------------------------ status
+
+    @tool("Connect (if needed) and report the connection, your character's binding, and a summary of its surroundings.")
+    async def status() -> str:
+        b = await game.bridge()
+        ping = await b.call("ping")
+        st = await game.call("get_state", {})
+        bound = game.bound_info or {}
+        body = bound.get("body", {})
+        head = (
+            f"Connected to Factorio {ping.get('factorio_version')} (mod {ping.get('mod_version')}"
+            f"{', Space Age' if ping.get('space_age') else ''}), tick {ping.get('tick')}. "
+            f"You control character '{game.character}'"
+            f"{' (taken over from an idle session)' if body.get('took_over') else ''}."
+        )
+        kit = body.get("kit")
+        if kit:
+            head += f" Scenario start kit received: {fmt.items_text(kit)}."
+        return head + "\n" + fmt.state(st)
+
+    # -------------------------------------------------------- perception
+
+    @tool("Your character's position, inventory, equipment and jobs, plus what it knows around it: players and other "
+          "agent characters in view, resource patches and trees on explored ground, your force's buildings with "
+          "status counts, visible enemies, research, power and top production.")
+    async def look_around(radius: Annotated[float, Field(ge=5, le=80, description="tiles, default 40")] = 40) -> str:
+        return fmt.state(await game.call("get_state", {"radius": radius}))
+
+    @tool("Your character's inventory and equipment.")
+    async def check_inventory() -> str:
+        r = await game.call("check_inventory", {})
+        inv = r.get("inventory") or {}
+        text = f"{r['owner']}: {fmt.items_text(inv) or 'empty inventory'}."
+        eq = r.get("equipment")
+        if eq:
+            text += f" Equipped: gun {eq.get('gun') or 'none'}; ammo {fmt.items_text(eq.get('ammo')) or 'none'}; armor {eq.get('armor') or 'none'}."
+        return text
+
+    @tool("Details of entities near map positions (searched within 1.5 tiles; explored ground only; other forces only "
+          "while visible): type, status, recipe, crafting progress, inventories, fuel burning, energy buffer (kJ), belt "
+          "contents, fluids, and for mining drills the ore left in their mining area. Up to 16 per call.")
+    async def inspect_entity(
+        x: float | None = None,
+        y: float | None = None,
+        targets: Annotated[list[Point] | None, Field(max_length=16, description="batch of positions")] = None,
+    ) -> str:
+        if targets:
+            r = await game.call("inspect", {"targets": [t.model_dump() for t in targets]})
+            out = []
+            for t, e in zip(targets, as_list(r.get("entities"))):
+                out.append(f"({t.x}, {t.y}): {e['error']}" if e.get("error") else fmt.inspect(e))
+            return "\n".join(out)
+        pos = xy(x, y)
+        if pos is None:
+            raise ValueError("give x and y, or targets")
+        return fmt.inspect(await game.call("inspect", {"position": pos}))
+
+    @tool("ASCII tile grid of a square area: one character per tile, rows north to south. Unexplored tiles are '?'. "
+          "The legend explains every symbol (uppercase = resources, lowercase = your force's buildings, @ = you).")
+    async def scan_area(
+        x: float | None = None,
+        y: float | None = None,
+        radius: Annotated[int, Field(ge=5, le=30, description="half-width in tiles, default 15")] = 15,
+    ) -> str:
+        return fmt.scan(await game.call("scan_area", {"center": xy(x, y, "scan center"), "radius": radius}))
+
+    @tool("Everything about up to 10 names at once — the item (stack size, fuel value), the entity it places (footprint, "
+          "power use in kW, crafting/mining speed, mining area, drill drop offset, inserter pickup/drop offsets, module "
+          "slots, belt speed) and the recipe that makes it (ingredients, products, time, unlocked or not).")
+    async def describe_prototype(names: Annotated[list[str], Field(min_length=1, max_length=10)]) -> str:
+        r = await game.call("describe_prototype", {"names": names})
+        return "\n".join(fmt.prototype(n, r.get(n) or {"kind": "unknown"}) for n in names)
+
+    @tool("Machines of your force in an area (explored ground) grouped by problem — no power, low power, no fuel, "
+          "missing ingredients (with which ingredient when detectable), output full, depleted ore, idle — plus power summary.")
+    async def analyze_factory(radius: Annotated[float, Field(ge=5, le=80)] = 40) -> str:
+        r = await game.call("analyze_factory", {"radius": radius})
+        lines = [f"Checked {r['machines_checked']} entities with a status within {r['radius']} tiles: "
+                 f"{r['working']} working, {r.get('with_problems', 0)} with problems, "
+                 f"{r.get('in_other_states', 0)} in other states."]
+        problems = as_list(r.get("problems"))
+        for p in problems:
+            missing = f" — missing: {p['missing']}" if p.get("missing") else ""
+            lines.append(f"{p['count']}x {p['name']}: {p['problem'].replace('_', ' ')}{missing} (e.g. at ({p['sample']['x']}, {p['sample']['y']}))")
+        if not problems:
+            lines.append("No machines with problems.")
+        others = as_list(r.get("other_states"))
+        if others:
+            lines.append("Other states: " + "; ".join(f"{o['count']}x {o['name']} {o['state'].replace('_', ' ')}" for o in others) + ".")
+        pw = r.get("power")
+        if pw:
+            lines.append(f"Power: {fmt.num(pw.get('production_kw', 0))} kW produced, {fmt.num(pw.get('consumption_kw', 0))} kW consumed, {pw['networks']} network(s).")
+        return "\n".join(lines)
+
+    @tool("Check whether items could be placed at explored positions right now (no side effects). Up to 24 placements "
+          "per call. Answers yes, or no with the blocker when identifiable.")
+    async def can_place(
+        item: str | None = None,
+        x: float | None = None,
+        y: float | None = None,
+        direction: Direction | None = None,
+        placements: Annotated[list[Placement] | None, Field(max_length=24)] = None,
+    ) -> str:
+        if placements:
+            r = await game.call("can_place", {"item": item, "placements": [
+                {"item": p.item, "position": {"x": p.x, "y": p.y}, "direction": p.direction} for p in placements]})
+            return "\n".join(
+                f"({p.x}, {p.y}) {p.item or item}: " + ("yes" if res.get("can_place") else f"NO — {res.get('reason', 'blocked')}")
+                for p, res in zip(placements, as_list(r.get("results"))))
+        if item is None or x is None or y is None:
+            raise ValueError("give item + x + y, or placements")
+        r = await game.call("can_place", {"item": item, "position": {"x": x, "y": y}, "direction": direction})
+        return f"Yes — {item} can be placed at ({x}, {y})." if r.get("can_place") else f"No — {r.get('reason', 'blocked')}."
+
+    @tool("Nearest width x height rectangle of free land (no water, cliffs or entities; trees allowed and counted) on "
+          "explored ground near a point.")
+    async def find_buildable_area(
+        width: Annotated[int, Field(ge=1, le=50)],
+        height: Annotated[int, Field(ge=1, le=50)],
+        x: float,
+        y: float,
+        max_distance: Annotated[float, Field(ge=5, le=100)] = 50,
+    ) -> str:
+        r = await game.call("find_buildable_area", {"width": width, "height": height, "near": {"x": x, "y": y}, "max_distance": max_distance})
+        return (f"Free {width}x{height} area: top-left ({r['top_left']['x']}, {r['top_left']['y']}), "
+                f"center ({r['center']['x']}, {r['center']['y']}); {r['trees_in_area']} tree(s) inside.")
+
+    @tool("Your force's item and fluid production and consumption on your surface, per minute over a time window "
+          "(like the production statistics window), plus all-time totals.")
+    async def production_stats(
+        window: Literal["5s", "1m", "10m", "1h", "10h", "50h", "250h", "1000h"] = "1m",
+        names: Annotated[list[str] | None, Field(description="only these items/fluids (default: all seen)")] = None,
+        kind: Literal["both", "item", "fluid"] = "both",
+        top: Annotated[int, Field(ge=1, le=200)] = 20,
+    ) -> str:
+        r = await game.call("production_stats", {"window": window, "names": names, "kind": kind, "top": top})
+        rows = as_list(r.get("rows"))
+        if not rows:
+            return f"No production or consumption recorded on {r.get('surface')} (window {window})."
+        lines = [f"Production on {r['surface']}, window {window} (per minute; {r['total_rows']} entries, showing {len(rows)}):"]
+        for row in rows:
+            lines.append(
+                f"{row['name']} ({row['kind']}): +{fmt.num(row['produced_per_min'])}/min, -{fmt.num(row['consumed_per_min'])}/min, "
+                f"net {fmt.num(row['net_per_min'])}/min; all-time +{fmt.num(row['produced_all_time'])} / -{fmt.num(row['consumed_all_time'])}")
+        return "\n".join(lines)
+
+    @tool("Trains on your surface (id, state, mode, cars, position, station, schedule, cargo) and the known train stop names.")
+    async def list_trains() -> str:
+        r = await game.call("list_trains", {})
+        trains = as_list(r.get("trains"))
+        lines = [] if trains else ["No trains on this surface."]
+        for t in trains:
+            bits = [f"train #{t['id']}: {t.get('locomotives', '?')} loco + {t.get('wagons', 0)} wagon(s)",
+                    "manual" if t.get("manual") else "automatic", f"state {str(t.get('state')).replace('_', ' ')}"]
+            if t.get("position"):
+                bits.append(f"at ({t['position']['x']}, {t['position']['y']})")
+            if t.get("at_station"):
+                bits.append(f'stopped at "{t["at_station"]}"')
+            if t.get("schedule"):
+                bits.append("route: " + " -> ".join(as_list(t["schedule"])))
+            if t.get("cargo"):
+                bits.append("cargo: " + fmt.items_text(t["cargo"]))
+            lines.append("; ".join(bits))
+        stations = as_list(r.get("stations"))
+        lines.append("Train stops: " + ", ".join(f'"{s}"' for s in stations) + "." if stations else "No known train stops.")
+        return "\n".join(lines)
+
+    @tool("Blueprints your character carries (inventory and books, nested books included).")
+    async def list_blueprints() -> str:
+        r = await game.call("list_blueprints", {})
+        bps = as_list(r.get("blueprints"))
+        if not bps:
+            return "Your character carries no blueprints."
+        return "\n".join(f'"{b.get("label") or "(unnamed)"}" ({b["entity_count"]} entities) — {b["where"]}' for b in bps)
+
+    @tool("Decode a carried blueprint by label into relative entity positions and its item bill (read in windows).")
+    async def read_blueprint(
+        label: str | None = None,
+        book: str | None = None,
+        offset: Annotated[int, Field(ge=0)] = 0,
+        limit: Annotated[int, Field(ge=1, le=200)] = 100,
+    ) -> str:
+        return fmt.blueprint(await game.call("read_blueprint", {"label": label, "book": book, "offset": offset, "limit": limit}))
+
+    @tool("Decode a blueprint export string into relative entity positions (top-left entity at 0,0), directions, "
+          "recipes and the item bill. Does not build.")
+    async def import_blueprint(
+        string: Annotated[str, Field(min_length=10)],
+        offset: Annotated[int, Field(ge=0)] = 0,
+        limit: Annotated[int, Field(ge=1, le=200)] = 100,
+    ) -> str:
+        return fmt.blueprint(await game.call("import_blueprint", {"string": string, "offset": offset, "limit": limit}))
+
+    @tool("Capture your force's buildings in an explored rectangle (max 200x200 tiles) as a blueprint export string, "
+          "with entity counts and the map anchor of its top-left entity.")
+    async def export_blueprint(x1: float, y1: float, x2: float, y2: float, label: str | None = None) -> str:
+        r = await game.call("export_blueprint", {"area": [{"x": x1, "y": y1}, {"x": x2, "y": y2}], "label": label})
+        counts = ", ".join(f"{n} x{c}" for n, c in sorted((r.get("entity_counts") or {}).items()))
+        return (f"Exported {r['total_entities']} entities ({counts}), footprint {r['size']['w']}x{r['size']['h']}.\n"
+                f"Blueprint string:\n{r['string']}")
+
+    # ------------------------------------------------------- chat/events
+
+    def chat_lines(msgs: list[dict[str, Any]]) -> str:
+        return "\n".join(f"[chat #{m['id']}] <{m['player']}{' (agent)' if m.get('bot') else ''}> {m['text']}" for m in msgs)
+
+    def event_lines(evs: list[dict[str, Any]]) -> str:
+        return "\n".join(f"[event #{e['id']} {e['kind']}] {e['text']}" for e in evs)
+
+    @tool("Chat messages since your last read (or since since_id): players and other agents; your own lines excluded.")
+    async def read_chat(since_id: Annotated[int | None, Field(ge=0)] = None) -> str:
+        b = await game.bridge()
+        r = await b.read_chat(since_id)
+        msgs = as_list(r.get("messages"))
+        return chat_lines(msgs[-50:]) if msgs else f"No new chat (last id {r.get('last_id')})."
+
+    @tool("Events since your last read (or since since_id): your jobs finishing or failing, your character attacked "
+          "or killed, research finished, supply warnings of duties.")
+    async def get_events(since_id: Annotated[int | None, Field(ge=0)] = None) -> str:
+        b = await game.bridge()
+        r = await b.read_events(since_id)
+        evs = as_list(r.get("events"))
+        return event_lines(evs[-50:]) if evs else f"No new events (last id {r.get('last_id')})."
+
+    @tool("Block until new chat or a new event arrives, or timeout_s passes (polls about twice per second).")
+    async def wait_for_events(timeout_s: Annotated[float, Field(ge=1, le=3600)] = 30) -> str:
+        b = await game.bridge()
+        deadline = time.monotonic() + timeout_s
+        while True:
+            chat = as_list((await b.read_chat()).get("messages"))
+            evs = as_list((await b.read_events()).get("events"))
+            if chat or evs:
+                return "\n".join(x for x in (chat_lines(chat), event_lines(evs)) if x)
+            if time.monotonic() >= deadline:
+                return f"Nothing new in {timeout_s:g}s."
+            await asyncio.sleep(0.5)
+
+    # --------------------------------------------------- instant actions
+
+    @tool("Say something in game chat as your character.")
+    async def say(text: Annotated[str, Field(min_length=1, max_length=400)]) -> str:
+        await game.call("say", {"text": text})
+        return "Said."
+
+    @tool("Queue a technology for research for your force.")
+    async def start_research(technology: str) -> str:
+        r = await game.call("start_research", {"technology": technology})
+        return f"Research queued: {r['technology']}."
+
+    @tool("Move a gun, ammo and/or armor from your main inventory into your equipment slots.")
+    async def equip(gun: str | None = None, ammo: str | None = None, armor: str | None = None) -> str:
+        r = await game.call("equip", {"gun": gun, "ammo": ammo, "armor": armor})
+        return f"Equipped — gun {r.get('gun') or 'none'}, ammo {fmt.items_text(r.get('ammo')) or 'none'}, armor {r.get('armor') or 'none'}."
+
+    @tool("Leave the vehicle you are in.")
+    async def exit_vehicle() -> str:
+        r = await game.call("exit_vehicle", {})
+        return f"Out of the {r['exited']} at ({r['position']['x']:.1f}, {r['position']['y']:.1f})."
+
+    @tool("Set a train's schedule (existing stop names with wait conditions) and switch it to automatic.")
+    async def set_train_schedule(train_id: int, stops: Annotated[list[TrainStop], Field(min_length=1, max_length=10)]) -> str:
+        r = await game.call("set_train_schedule", {"train_id": train_id, "stops": [s.model_dump() for s in stops]})
+        return f"Train #{r['train_id']} set to automatic with {r['stops']} stop(s)." + ("" if r.get("fueled") else " Its locomotives have no fuel.")
+
+    @tool("Create a new body for your character at the spawn point (after death), with the scenario's respawn kit.")
+    async def respawn() -> str:
+        r = await game.call("respawn", {})
+        at = f"({r['position']['x']:.1f}, {r['position']['y']:.1f})"
+        return f"Your character already has a body at {at}." if r.get("already_existed") else f"Respawned at {at}."
+
+    # --------------------------------------------------------------- jobs
+
+    @tool("Walk to a map position with the game pathfinder at normal walking speed. The goal must be on explored "
+          "ground or within the exploration radius (default 64 tiles) of you.")
+    async def walk_to(x: Coord, y: Coord, arrive_within: Annotated[float, Field(ge=0.5, le=10)] = 1.0,
+                      wait_s: WaitS = None, replace: Replace = False) -> str:
+        return await run_job({"type": "walk_to", "target": {"x": x, "y": y}, "arrive_within": arrive_within}, wait_s, replace)
+
+    @tool("Board the nearest free car (fuelling it from your inventory if needed) and drive to a position.")
+    async def drive_to(x: Coord, y: Coord, arrive_within: Annotated[float, Field(ge=2, le=15)] = 3,
+                       wait_s: WaitS = None, replace: Replace = False) -> str:
+        return await run_job({"type": "drive_to", "target": {"x": x, "y": y}, "arrive_within": arrive_within}, wait_s, replace)
+
+    @tool("Persistent job: follow a player at a distance until cancelled. Replaces your current jobs.")
+    async def follow_player(player: str | None = None, distance: Annotated[float, Field(ge=1, le=10)] = 3) -> str:
+        return await run_job({"type": "follow_player", "player": player, "distance": distance}, 0, True)
+
+    @tool("Mine by hand (vanilla mining time and reach): either the minable thing at x,y, or `count` mining operations "
+          'of a resource name ("iron-ore", "coal", "stone", "tree", "rock", ...) found on explored ground within 80 tiles.')
+    async def mine(x: float | None = None, y: float | None = None, resource: str | None = None,
+                   count: Annotated[int | None, Field(ge=1, le=200)] = None,
+                   wait_s: WaitS = None, replace: Replace = False) -> str:
+        pos = xy(x, y)
+        if (resource is None) == (pos is None):
+            raise ValueError("give either a position (x and y) or a resource name")
+        task = {"type": "mine", "resource": resource, "count": count} if resource else {"type": "mine", "target": pos}
+        return await run_job(task, wait_s, replace)
+
+    @tool("Place a building from your inventory (walks within build range; normal placement rules).")
+    async def place_entity(item: str, x: Coord, y: Coord, direction: Direction | None = None,
+                           wait_s: WaitS = None, replace: Replace = False) -> str:
+        return await run_job({"type": "place", "item": item, "position": {"x": x, "y": y}, "direction": direction}, wait_s, replace)
+
+    @tool("Hand-craft with your character's crafting queue (real crafting time; missing intermediates are queued too).")
+    async def craft_items(recipe: str, count: Annotated[int, Field(ge=1, le=100)] = 1,
+                          wait_s: WaitS = None, replace: Replace = False) -> str:
+        return await run_job({"type": "craft", "recipe": recipe, "count": count}, wait_s, replace)
+
+    @tool("Move items from your inventory into the entity at x,y (walks within reach).")
+    async def insert_items(x: Coord, y: Coord, items: Items, wait_s: WaitS = None, replace: Replace = False) -> str:
+        return await run_job({"type": "insert", "target": {"x": x, "y": y}, "items": items}, wait_s, replace)
+
+    @tool("Take items out of the entity at x,y into your inventory: specific counts, or all=true (walks within reach).")
+    async def extract_items(x: Coord, y: Coord, items: Items | None = None, all: bool = False,
+                            wait_s: WaitS = None, replace: Replace = False) -> str:
+        if items is None and not all:
+            raise ValueError("pass items with counts, or all=true")
+        return await run_job({"type": "extract", "target": {"x": x, "y": y}, "items": items, "all": all}, wait_s, replace)
+
+    @tool("Set the recipe of the crafting machine at x,y (walks within reach).")
+    async def set_recipe(x: Coord, y: Coord, recipe: str, wait_s: WaitS = None, replace: Replace = False) -> str:
+        return await run_job({"type": "set_recipe", "target": {"x": x, "y": y}, "recipe": recipe}, wait_s, replace)
+
+    @tool("Rotate the entity at x,y one step, or to a 16-way direction (walks within reach).")
+    async def rotate_entity(x: Coord, y: Coord, direction: Direction | None = None,
+                            wait_s: WaitS = None, replace: Replace = False) -> str:
+        return await run_job({"type": "rotate", "target": {"x": x, "y": y}, "direction": direction}, wait_s, replace)
+
+    async def dry_run(steps: list[BuildStep], auto_craft: bool) -> str:
+        """Checks a plan without building: item bill vs inventory, recipe
+        validity, placement against the current map, overlaps between steps."""
+        inv = (await game.call("check_inventory", {})).get("inventory") or {}
+        need = Counter(s.item for s in steps)
+        for s in steps:  # items to insert into placed entities come from the inventory too
+            for k, n in (s.insert or {}).items():
+                need[k] += n
+        missing = {k: n - inv.get(k, 0) for k, n in need.items() if n > inv.get(k, 0)}
+        names = sorted({s.item.split("@")[0] for s in steps} | {s.recipe for s in steps if s.recipe})
+        # item keys like "coal@rare" in insert lists don't need prototypes here
+        protos: dict[str, Any] = {}
+        for i in range(0, len(names), 10):
+            protos.update(await game.call("describe_prototype", {"names": names[i:i + 10]}))
+        problems: list[str] = []
+        for i, s in enumerate(steps, 1):
+            if s.recipe:
+                rp = (protos.get(s.recipe) or {}).get("recipe")
+                if not rp:
+                    problems.append(f"step {i}: no recipe called '{s.recipe}'")
+                elif rp.get("enabled") is False:
+                    problems.append(f"step {i}: recipe {s.recipe} is not unlocked")
+        # overlaps between steps (footprints from prototypes; 90° turns swap axes)
+        rects = []
+        for i, s in enumerate(steps, 1):
+            p = (protos.get(s.item.split("@")[0]) or {}).get("entity") or {}
+            w, h = p.get("tile_width") or 1, p.get("tile_height") or 1
+            if (s.direction or 0) in (4, 12):
+                w, h = h, w
+            rects.append((i, s.x - w / 2, s.y - h / 2, s.x + w / 2, s.y + h / 2))
+        for a in range(len(rects)):
+            for b_ in range(a + 1, len(rects)):
+                i, ax1, ay1, ax2, ay2 = rects[a]
+                j, bx1, by1, bx2, by2 = rects[b_]
+                if ax1 < bx2 - 1e-6 and bx1 < ax2 - 1e-6 and ay1 < by2 - 1e-6 and by1 < ay2 - 1e-6:
+                    problems.append(f"steps {i} and {j} overlap")
+        blocked = []
+        for i in range(0, len(steps), 24):
+            batch = steps[i:i + 24]
+            r = await game.call("can_place", {"placements": [
+                {"item": s.item.split("@")[0], "position": {"x": s.x, "y": s.y}, "direction": s.direction} for s in batch]})
+            for k, (s, res) in enumerate(zip(batch, as_list(r.get("results"))), i + 1):
+                if not res.get("can_place"):
+                    blocked.append(f"step {k} {s.item} at ({s.x}, {s.y}): {res.get('reason', 'blocked')}")
+        lines = [f"Dry run of {len(steps)} step(s) — nothing was built."]
+        lines.append(f"Items needed (placements + inserts): {fmt.items_text(dict(need))}.")
+        lines.append(("Missing from your inventory: " + fmt.items_text(missing)
+                      + (" (auto_craft would try to hand-craft these first)." if auto_craft else ".")) if missing
+                     else "You carry every item needed.")
+        lines.append(f"{len(steps) - len(blocked)}/{len(steps)} placements are free on the current map"
+                     + (":" if blocked else "."))
+        lines.extend("  " + b for b in blocked)
+        lines.extend(problems)
+        return "\n".join(lines)
+
+    @tool("Build many entities as ONE job: steps are placed in order (walking within build range, items from your "
+          "inventory, normal placement rules), each optionally setting a recipe and inserting items. Failed steps are "
+          "reported and skipped unless stop_on_error. auto_craft hand-crafts missing placeable items first. "
+          "dry_run=true only checks the plan (items, recipes, placement, overlaps) without building.")
+    async def build_plan(
+        steps: Annotated[list[BuildStep], Field(min_length=1, max_length=100)],
+        stop_on_error: bool = False,
+        auto_craft: bool = True,
+        dry_run: bool = False,
+        wait_s: WaitS = None,
+        replace: Replace = False,
+    ) -> str:
+        if dry_run:
+            return await dry_run_plan(steps, auto_craft)
+        task = {"type": "build_plan", "stop_on_error": stop_on_error, "auto_craft": auto_craft, "steps": [
+            {"item": s.item, "position": {"x": s.x, "y": s.y}, "direction": s.direction, "recipe": s.recipe, "insert": s.insert}
+            for s in steps]}
+        return await run_job(task, wait_s, replace)
+
+    dry_run_plan = dry_run
+
+    @tool("Build a whole blueprint as ONE job, anchored so its top-left entity lands at (anchor_x, anchor_y): from an "
+          "export string, or a carried blueprint by label. Up to 1000 entities; per-step failures are reported.")
+    async def build_blueprint(
+        anchor_x: Coord,
+        anchor_y: Coord,
+        string: Annotated[str | None, Field(description="blueprint export string")] = None,
+        label: str | None = None,
+        book: str | None = None,
+        stop_on_error: bool = False,
+        wait_s: WaitS = None,
+        replace: Replace = False,
+    ) -> str:
+        if not string and not label:
+            raise ValueError("give a blueprint export string, or the label of a carried blueprint")
+        task = {"type": "build_blueprint", "string": string, "label": label, "book": book,
+                "anchor": {"x": anchor_x, "y": anchor_y}, "stop_on_error": stop_on_error}
+        return await run_job(task, wait_s, replace)
+
+    @tool("Queue a sequence of actions (craft, insert, extract, mine, place, set_recipe, rotate, walk_to) as chained "
+          "jobs. If one fails, the rest of the chain is cancelled. Waits for the last one up to wait_s.")
+    async def run_plan(steps: Annotated[list[PlanStep], Field(min_length=1, max_length=25)],
+                       wait_s: WaitS = None, replace: Replace = False) -> str:
+        b = await game.bridge()
+        chain = uuid.uuid4().hex
+        ids: list[int] = []
+        for i, s in enumerate(steps):
+            d = s.model_dump(exclude_none=True)
+            x, y = d.pop("x", None), d.pop("y", None)
+            if x is not None and y is not None:
+                d["position" if s.type == "place" else "target"] = {"x": x, "y": y}
+            r = await b.enqueue(d, replace=replace and i == 0, quiet=i < len(steps) - 1, chain=chain)
+            if r.get("cancelled"):
+                raise ToolError(f"queued {len(ids)} step(s), then an earlier step failed; the rest was skipped — see get_events")
+            ids.append(int(r["task_id"]))
+        waited = wait_default(wait_s)
+        head = f"Plan queued as jobs #{ids[0]}–#{ids[-1]}. "
+        if waited <= 0:
+            return head.strip()
+        res = await b.wait_job(ids[-1], waited)
+        if res.status == "cancelled":
+            for jid in ids:
+                jr = await b.job(jid)
+                if jr.status == "failed":
+                    raise ToolError(head + f"Job #{jid} ({jr.type}) failed: {jr.detail}; the rest of the plan was cancelled.")
+        return head + describe(res, waited)
+
+    @tool("Mine your force's own buildings back into your inventory (vanilla mining time): the nearest one at x,y, "
+          "or all within area_radius (max 10 tiles, 50 buildings).")
+    async def deconstruct(x: Coord, y: Coord, area_radius: Annotated[float | None, Field(ge=1, le=10)] = None,
+                          wait_s: WaitS = None, replace: Replace = False) -> str:
+        task = ({"type": "deconstruct", "area": {"center": {"x": x, "y": y}, "radius": area_radius}}
+                if area_radius else {"type": "deconstruct", "target": {"x": x, "y": y}})
+        return await run_job(task, wait_s, replace)
+
+    @tool("Fight visible enemies around a point with your equipped gun (walks into range, shoots, next target); "
+          "anchored to the radius; retreats below flee_below health.")
+    async def fight(x: float | None = None, y: float | None = None, radius: Annotated[float, Field(ge=5, le=40)] = 20,
+                    flee_below: Annotated[float, Field(ge=0.05, le=0.9)] = 0.3,
+                    wait_s: WaitS = None, replace: Replace = False) -> str:
+        return await run_job({"type": "fight", "target": xy(x, y), "radius": radius, "flee_below": flee_below}, wait_s, replace)
+
+    @tool("Persistent job: guard an area — shoot enemies that come near, refill ammo turrets and repair structures "
+          "from your inventory — until cancelled. Replaces your current jobs.")
+    async def defend_area(x: float | None = None, y: float | None = None, radius: Annotated[float, Field(ge=8, le=32)] = 16) -> str:
+        return await run_job({"type": "defend_area", "center": xy(x, y), "radius": radius}, 0, True)
+
+    @tool("Persistent job: keep burner machines around a point fuelled from your inventory until cancelled. "
+          "Replaces your current jobs.")
+    async def keep_fueled(x: float | None = None, y: float | None = None, radius: Annotated[float, Field(ge=5, le=40)] = 24,
+                          fuel: str | None = None) -> str:
+        return await run_job({"type": "keep_fueled", "center": xy(x, y), "radius": radius, "fuel": fuel}, 0, True)
+
+    @tool("Status of one of your jobs, or (without job_id) your running job, queue and recently finished jobs.")
+    async def job_status(job_id: int | None = None) -> str:
+        b = await game.bridge()
+        if job_id is not None:
+            r = await b.job(job_id)
+            return f"Job #{r.job_id} ({r.type}): {r.status}{' — ' + r.detail if r.detail else ''}"
+        r = await game.call("list_tasks", {"limit": 10})
+        lines = []
+        a = r.get("active")
+        lines.append(f"Running: job #{a['id']} ({a['type']}) for {a['running_s']}s." if a else "Running: nothing.")
+        q = as_list(r.get("queued"))
+        lines.append("Queued: " + ", ".join(f"#{j['id']} ({j['type']})" for j in q) + "." if q else "Queued: nothing.")
+        for j in as_list(r.get("recent")):
+            lines.append(f"#{j['id']} ({j['type']}) {j['status']} {j['ago_s']}s ago{' — ' + j['detail'] if j.get('detail') else ''}")
+        return "\n".join(lines)
+
+    @tool("Wait up to timeout_s for one of your jobs to finish.")
+    async def job_wait(job_id: int, timeout_s: Annotated[float, Field(ge=0, le=3600)] = 60) -> str:
+        b = await game.bridge()
+        return describe(await b.wait_job(job_id, timeout_s), timeout_s)
+
+    @tool("Cancel one of your jobs, or all of them (all=true), stopping your character.")
+    async def job_cancel(job_id: int | None = None, all: bool = False) -> str:
+        if job_id is None and not all:
+            raise ValueError("give job_id, or all=true")
+        r = await game.call("cancel", {"all": True} if all else {"task_id": job_id})
+        return f"Cancelled {r['cancelled']} job(s)."

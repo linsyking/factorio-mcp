@@ -1,0 +1,27 @@
+[project]
+name = "factorio-calc-mcp"
+version = "0.1.0"
+description = "MCP server for Factorio production math (ratios, machine counts, mining drills, belts), built on FactorioCalc"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=2.2",
+    "factoriocalc>=0.3",
+]
+
+[project.scripts]
+factorio-calc-mcp = "factorio_calc_mcp.server:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/factorio_calc_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

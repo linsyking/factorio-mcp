@@ -1,0 +1,38 @@
+data:extend({
+  {
+    type = "int-setting",
+    name = "factorio-mcp-max-characters",
+    setting_type = "runtime-global",
+    default_value = 32,
+    minimum_value = 1,
+    maximum_value = 256,
+    order = "a",
+  },
+  {
+    type = "int-setting",
+    name = "factorio-mcp-chart-radius",
+    setting_type = "runtime-global",
+    default_value = 2,
+    minimum_value = 0,
+    maximum_value = 5,
+    order = "b",
+  },
+  {
+    type = "int-setting",
+    name = "factorio-mcp-view-radius",
+    setting_type = "runtime-global",
+    default_value = 32,
+    minimum_value = 8,
+    maximum_value = 128,
+    order = "c",
+  },
+  {
+    type = "int-setting",
+    name = "factorio-mcp-explore-radius",
+    setting_type = "runtime-global",
+    default_value = 64,
+    minimum_value = 16,
+    maximum_value = 256,
+    order = "d",
+  },
+})
