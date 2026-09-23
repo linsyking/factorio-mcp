@@ -109,6 +109,7 @@ script.on_nth_tick(vision.UPDATE_TICKS, function()
 end)
 script.on_event(defines.events.on_tick, tasks.on_tick)
 script.on_nth_tick(follow.CHECK_TICKS, follow.on_check)
+script.on_event(defines.events.on_gui_click, follow.on_gui_click)
 follow.register_commands()
 script.on_event(defines.events.on_script_path_request_finished, walk.on_path_finished)
 script.on_event(defines.events.on_entity_damaged, events.on_entity_damaged,

@@ -5,23 +5,17 @@
 --     MCP tool set_status;
 --   * what the character is doing right now, derived from its running job
 --     ("mining coal 12/60", "building 7/40 (+3 queued)", "idle").
--- It is drawn under the character's name label and shown under each camera
--- of /follow-cam and /follow-cams. Agents never read it back.
+-- It is shown under each agent's camera window (/follow-cam, /follow-cams).
+-- Agents never read it back.
 local companion = require("scripts.companion")
 
 local M = {}
 
 local MAX_LEN = 120
-local LABEL_OFFSET = { 0, -2.2 } -- just under the name label (companion.lua draws it at -2.9)
 
 local function statuses()
   storage.statuses = storage.statuses or {}
   return storage.statuses
-end
-
-local function labels()
-  storage.status_labels = storage.status_labels or {}
-  return storage.status_labels
 end
 
 -- rpc "set_status" (scoped to the bound character).
@@ -80,38 +74,20 @@ function M.line(name)
   return act
 end
 
--- Keep the floating status text under every agent's name label current.
--- Runs on_nth_tick (control.lua); must never raise.
+-- Housekeeping, run on_nth_tick (control.lua); must never raise. The status
+-- is shown only under cameras (scripts/follow.lua), not above characters:
+-- this removes status texts drawn by mod 0.2.6 and drops statuses of retired
+-- characters.
 function M.update_labels()
   pcall(function()
-    local ls = labels()
-    for _, name in ipairs(companion.names()) do
-      local body = companion.get(name)
-      local obj = ls[name]
-      if body then
-        local text = M.line(name)
-        local ok_target = obj and obj.valid and obj.target and obj.target.entity == body
-        if ok_target then
-          if obj.text ~= text then obj.text = text end
-        else
-          if obj and obj.valid then obj.destroy() end
-          ls[name] = rendering.draw_text({
-            text = text, surface = body.surface, target = { entity = body, offset = LABEL_OFFSET },
-            color = { 0.92, 0.92, 0.92 }, scale = 0.9, alignment = "center", scale_with_zoom = true,
-          })
-        end
-      elseif obj then
-        if obj.valid then obj.destroy() end
-        ls[name] = nil
+    if storage.status_labels then
+      for _, obj in pairs(storage.status_labels) do
+        if obj and obj.valid then obj.destroy() end
       end
+      storage.status_labels = nil
     end
-    -- retired characters
-    for name, obj in pairs(ls) do
-      if not companion.record(name) then
-        if obj.valid then obj.destroy() end
-        ls[name] = nil
-        statuses()[name] = nil
-      end
+    for name in pairs(statuses()) do
+      if not companion.record(name) then statuses()[name] = nil end
     end
   end)
 end
