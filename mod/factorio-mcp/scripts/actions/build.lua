@@ -54,6 +54,7 @@ function M.place.start(task)
   end
   task.direction = math.floor(tonumber(task.direction) or 0) % 16
   task._entity_name = result.name
+  task.position = placement.snap(result, task.position, task.direction)
 end
 
 function M.place.tick(task)
@@ -67,6 +68,11 @@ function M.place.tick(task)
   if items.count(c, task.item) == 0 then
     return { status = "failed", detail = "I no longer have any " .. task.item .. " in my inventory" }
   end
+
+  local aside = approach.step_aside(task, c,
+    placement.footprint(prototypes.entity[task._entity_name], task.position, task.direction))
+  if type(aside) == "table" then return aside end
+  if aside ~= "ok" then return nil end
 
   local can_place = c.surface.can_place_entity({
     name = task._entity_name,
@@ -89,6 +95,7 @@ function M.place.tick(task)
     direction = task.direction,
     force = c.force,
     quality = task._quality,
+    type = task.underground_type, -- underground belts: "input" or "output"
     raise_built = true,
   })
   if not built then

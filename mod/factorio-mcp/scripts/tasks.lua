@@ -93,7 +93,10 @@ local function finish(task, status, detail)
   -- The chain is also remembered as failed: a fast failure can beat the
   -- remaining enqueue RPCs to the punch, so late arrivals of the same chain
   -- are cancelled at enqueue time (see M.enqueue).
-  if status == "failed" and task.chain then
+  -- An optional step (a fuel top-up, say) reports its failure but doesn't
+  -- take the rest of the chain down; it is still cancelled like any other
+  -- step when something before it fails.
+  if status == "failed" and task.chain and not task.optional then
     storage.tasks.failed_chains = storage.tasks.failed_chains or {}
     storage.tasks.failed_chains[task.chain] = game.tick
     local l2 = lane(task.companion or companion.DEFAULT)
@@ -117,6 +120,9 @@ local function finish(task, status, detail)
     if status == "done" and not task.quiet then
       events.push("job_done", "job #" .. task.id .. " (" .. task.type .. ") done: " .. (detail or "done"),
         { companion = who, job_id = task.id })
+    elseif status == "failed" and task.optional then
+      events.push("optional_job_failed", "optional job #" .. task.id .. " (" .. task.type .. ") failed, the rest "
+        .. "of the queue goes on: " .. (detail or "no detail"), { companion = who, job_id = task.id })
     elseif status == "failed" then
       events.push("job_failed", "job #" .. task.id .. " (" .. task.type .. ") FAILED: " .. (detail or "no detail"),
         { companion = who, job_id = task.id })
@@ -159,6 +165,7 @@ function M.enqueue(params)
   task.enqueued_tick = game.tick
   task.background = params.background == true
   task.quiet = params.quiet == true
+  task.optional = params.optional == true
   if params.chain ~= nil then task.chain = tostring(params.chain) end
 
   -- Late arrival of an already-failed plan: cancel silently right here (the

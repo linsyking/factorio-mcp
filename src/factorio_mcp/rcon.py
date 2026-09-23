@@ -1,10 +1,13 @@
 """Asyncio Source-RCON client for Factorio.
 
-Factorio splits responses larger than ~4 kB into several packets that share
-the request id, with no terminator. So every command is followed by a
-"sentinel" command (a single space — Factorio sends no reply at all to an
-empty command); when the sentinel's reply arrives, everything buffered for
-the real id is the complete response. (Technique from Agentic-Factorio.)
+One command -> one reply packet with the command's id. Factorio 2.0.77 sends
+a whole reply in one packet (measured up to 1 MB; the mod also chunks its
+envelopes at 3.4 kB), and replies may arrive out of order: while a player is
+connected, a Lua command that changes game state can be answered after a
+command sent right behind it. So this client does not use Agentic-Factorio's
+"sentinel" trick (send a no-op after each command and treat its reply as the
+end marker) — that silently returned empty replies with a player online. It
+waits for the reply whose id matches, and never pipelines.
 """
 
 from __future__ import annotations
@@ -90,27 +93,23 @@ class RconClient:
             if not self.connected:
                 await self.connect()
             assert self._writer is not None
-            cmd_id, sentinel_id = self._alloc(), self._alloc()
+            cmd_id = self._alloc()
             self._writer.write(encode_packet(cmd_id, EXEC_COMMAND, command))
-            self._writer.write(encode_packet(sentinel_id, EXEC_COMMAND, " "))
             try:
                 await self._writer.drain()
-                chunks: list[bytes] = []
 
-                async def collect() -> None:
+                async def reply() -> bytes:
                     while True:
                         req_id, _, body = await self._read_packet()
                         if req_id == cmd_id:
-                            chunks.append(body)
-                        elif req_id == sentinel_id:
-                            return
+                            return body
 
-                await asyncio.wait_for(collect(), self.timeout_s)
+                body = await asyncio.wait_for(reply(), self.timeout_s)
             except (asyncio.TimeoutError, asyncio.IncompleteReadError, OSError) as e:
                 # The stream position is unknown now — drop the connection.
                 self.close()
                 raise RconError(f"RCON command failed: {e!r}") from e
-            return b"".join(chunks).decode("utf-8", errors="replace")
+            return body.decode("utf-8", errors="replace")
 
     def close(self) -> None:
         if self._writer is not None:

@@ -74,5 +74,26 @@ do -- unrelated chains are untouched
   check(status_of(c.task_id) == "done", "independent chain unaffected")
 end
 
+do -- an optional step's failure is reported but the chain goes on
+  pushed = {}
+  package.loaded["scripts.events"].push = function(kind) pushed[#pushed + 1] = kind end
+  local a = tasks.enqueue({ task = { type = "walk_to", boom = true }, background = true, chain = "opt", optional = true })
+  local b = tasks.enqueue({ task = { type = "walk_to" }, background = true, chain = "opt" })
+  tasks.on_tick() -- a fails
+  tasks.on_tick() -- b
+  check(status_of(a.task_id) == "failed" and status_of(b.task_id) == "done", "optional: failure doesn't cancel the rest")
+  check(pushed[1] == "optional_job_failed", "optional: reported as optional_job_failed (not job_failed)")
+  local late = tasks.enqueue({ task = { type = "walk_to" }, background = true, chain = "opt" })
+  check(not late.cancelled, "optional: the chain is not marked failed")
+  tasks.on_tick() -- run `late` so the next block starts with an empty lane
+end
+
+do -- an optional step is still cancelled when an earlier required step fails
+  local a = tasks.enqueue({ task = { type = "walk_to", boom = true }, background = true, chain = "req" })
+  local b = tasks.enqueue({ task = { type = "walk_to" }, background = true, chain = "req", optional = true })
+  tasks.on_tick()
+  check(status_of(a.task_id) == "failed" and status_of(b.task_id) == "cancelled", "optional: cancelled by an earlier failure")
+end
+
 print(failures == 0 and "\nALL TESTS PASSED" or ("\n" .. failures .. " FAILURES"))
 os.exit(failures == 0 and 0 or 1)

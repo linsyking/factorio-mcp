@@ -1,4 +1,4 @@
-# Protocol v5: MCP server ↔ game mod
+# Protocol v6: MCP server ↔ game mod
 
 `ping` returns `protocol_version: 5`. The MCP server refuses to bind when the versions differ.
 
@@ -12,7 +12,8 @@ Every call is one RCON command:
 
 - **Params:** always a JSON **string**; the server escapes `\` and `"`.
 - **Replies:** the mod answers on the same RCON response with `rcon.print(json)`.
-- **Sentinel:** the RCON client sends a sentinel command (a single space) after every command. Factorio splits replies larger than about 4 kB into packets that share one id and have no terminator; the sentinel's reply marks the end.
+- **One reply per command:** the client sends one command, then reads packets until the one carrying that command's id; that packet is the whole reply (Factorio 2.0.77 does not split replies — measured up to 1 MB). It never pipelines. Replies can come back out of order while a player is connected, so Agentic-Factorio's sentinel trick (a no-op sent right after each command, whose reply marks the end) is not used: with a player online it returned empty replies for state-changing calls such as `bind`.
+- **Errors:** runtime Lua errors outside the mod's `pcall` come back as `Cannot execute command. Error: …` (the bridge reports it as an invalid envelope).
 
 ### Envelope
 
@@ -57,6 +58,9 @@ All results are filtered by fog of war (`scripts/vision.lua`):
 | `get_chat {since_id}` | Everything after the cursor except this character's own lines. Agent lines have `bot: true` |
 | `get_events {since_id}` | Events for this character plus force-wide ones (`job_done`, `job_failed`, `attacked`, `died`, `research_finished`, `supply_warning`) |
 
+| `route_belt {from, to, belt?, allow_underground?, clear_obstacles?, margin?, avoid?, planned_belts?}` | Plans one belt line on known ground (see `scripts/route/`). An endpoint is `{x, y, direction?, port}` with `port` ∈ `tile`, `drop`, `pickup`, `belt` or `fluid` (inserter/drill drop tile, inserter pickup tile, join an existing belt). `allow_underground` nil means: if carried or the recipe is enabled. The search box is the endpoints' bounding box plus `margin` (2–40), at most 160 tiles a side. Returns `steps [{item, x, y, direction, underground_type?}]`, `bill`, `missing`, `unavailable`, `mine_first` (trees and rocks on the path), `effects` (what joining the target belt does), `length`, `turns`, `underground_pairs`, `expansions`. No side effects: the MCP server turns the steps into mine and `build_plan` jobs when `build=true` |
+| `route_pipe {…}` | The same for pipes and pipe-to-ground. It never runs next to a foreign fluid connection, so fluids don't mix |
+
 ## Instant actions
 
 `say {text}`, `start_research {technology}`, `equip {gun?, ammo?, armor?}`, `exit_vehicle`, `set_train_schedule {train_id, stops}`.
@@ -84,6 +88,33 @@ Task types:
 - combat and upkeep: `fight`, `defend_area`, `keep_fueled`
 
 Every task with a map target walks within reach first, and each movement goal is checked against the exploration rule.
+
+### Build checks
+
+`layout_context {area: [x1, y1, x2, y2], points: [{x, y}, …]}` returns `{belts: [{x, y, direction, type, name, underground_type?}], at: [name | "nothing" | "unexplored"]}`. It's read-only and uses known ground only (at most 200×200 tiles, 400 points).
+
+The server combines it with the plan's own entities (`checks.py`):
+- belt dead ends next to an input-less line;
+- belts facing each other;
+- each inserter's pickup and drop entity, with a warning when it picks from nothing or from a chest placed in the same plan.
+
+### Optional jobs
+
+`enqueue {…, optional: true}`:
+- A failure of this job doesn't mark its chain failed, so later jobs still run. It emits `optional_job_failed` instead of `job_failed`.
+- It is still cancelled when an earlier job of its chain fails.
+
+### Queue-ahead (server side)
+
+- **One chain per character.** The MCP server passes one `chain` id with every job of its character: single tools, `run_plan` steps and route builds alike.
+- **Failure handling.** When a chained job fails, the mod cancels the queued jobs of that chain and remembers the chain as failed. A late enqueue for that chain is cancelled at once (`{cancelled: true}`).
+- **After a failure.** The server starts a new chain as soon as it has told the agent about the failure, by any of:
+  - a `job_failed` event in a result footer;
+  - a failed or cancelled wait;
+  - a cancelled enqueue;
+  - `job_cancel all`;
+  - `replace=true`.
+- **Footers.** Every tool result (except `read_chat`, `wait_for_events` and `status`) ends with the `get_events` and `get_chat` entries since the character's cursors. Reading advances the cursors, so each entry is shown once.
 
 ## Fairness rules enforced mod-side
 

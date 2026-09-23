@@ -2,11 +2,9 @@
 --   {target={x,y}}            one mining op on the nearest minable within 2 tiles
 --   {resource=name, count=n}  composite: auto-find within 80 tiles (explored chunks only), walk, mine,
 --                             hop to the next entity when one is exhausted
--- Mining is a timer + LuaEntity.mine() that takes exactly the vanilla
--- hand-mining time (see hand_mining_ticks); mining_state is set for the
--- animation. mine() on a resource extracts one
--- unit per call and returns true only on exhaustion — success is measured by
--- inventory delta, not the return value.
+-- The engine mines (selected entity + mining_state, like a player), so the
+-- character animates and timing/statistics are vanilla; see run_mining_op.
+-- Success is measured by inventory delta.
 local companion = require("scripts.companion")
 local approach = require("scripts.actions.approach")
 local vision = require("scripts.vision")
@@ -47,42 +45,98 @@ local function product_names(e)
   return names
 end
 
--- One timed mining op on task._entity. Returns nil while the timer runs, or
--- {gained_total=, exhausted=} once mine() was executed. Sets result.full=true
--- when nothing fit in the inventory.
-local function run_mining_op(task, c, m)
+-- One mining op on task._entity. Returns nil while mining, or
+-- {gained_total=, exhausted=, full=} once the op is over.
+--
+-- The engine does the mining: the character selects the entity and gets
+-- mining_state set, exactly like a player holding the mine button. That gives
+-- the mining animation, vanilla timing and the force's production statistics.
+-- An op is over when one of the entity's products arrives in the inventory (or
+-- the entity is gone). If the engine would select something else at that spot
+-- (a drill standing on the ore) or never makes progress, the op falls back to a
+-- script timer of the same vanilla length plus LuaEntity.mine().
+local function script_op(task, c, m)
   local e = task._entity
-  if not m.remaining then
-    m.remaining = op_ticks(c, e)
-    m.op_products = product_names(e)
+  if not (e and e.valid) then
+    m.remaining = nil
+    return { gained_total = 0, exhausted = true, full = false }
   end
-
-  c.mining_state = { mining = true, position = e.position }
+  if not m.remaining then m.remaining = op_ticks(c, e) end
   m.remaining = m.remaining - 1
   if m.remaining > 0 then return nil end
   m.remaining = nil
-  c.mining_state = { mining = false }
-
   local inv = c.get_main_inventory()
   local before_total = inv.get_item_count()
   local before = {}
-  for _, name in ipairs(m.op_products) do
-    before[name] = inv.get_item_count(name)
-  end
+  for _, name in ipairs(m.op_products) do before[name] = inv.get_item_count(name) end
   local exhausted = e.mine({ inventory = inv, raise_destroyed = true })
   local gained_total = inv.get_item_count() - before_total
   for _, name in ipairs(m.op_products) do
     local g = inv.get_item_count(name) - before[name]
     if g > 0 then
-      stats.record_produced(c, name, g)
+      stats.record_produced(c, name, g) -- script mining isn't in the statistics otherwise
       m.gained[name] = (m.gained[name] or 0) + g
     end
   end
-  return {
-    gained_total = gained_total,
-    exhausted = exhausted or not e.valid,
-    full = gained_total <= 0,
-  }
+  return { gained_total = gained_total, exhausted = exhausted or not e.valid, full = gained_total <= 0 }
+end
+
+local function run_mining_op(task, c, m)
+  local e = task._entity
+  local inv = c.get_main_inventory()
+  if not m.watch then
+    m.op_products = product_names(e)
+    local before = {}
+    for _, name in ipairs(m.op_products) do before[name] = inv.get_item_count(name) end
+    m.watch = { before = before, total = inv.get_item_count(), started = game.tick,
+                limit = op_ticks(c, e) * 2 + 60, script = false }
+  end
+  local w = m.watch
+
+  if w.script then
+    local r = script_op(task, c, m)
+    if r then m.watch = nil end
+    return r
+  end
+
+  local got = false
+  for _, name in ipairs(m.op_products) do
+    if inv.get_item_count(name) > w.before[name] then got = true end
+  end
+  if got or not e.valid then
+    for _, name in ipairs(m.op_products) do
+      local g = inv.get_item_count(name) - w.before[name]
+      if g > 0 then m.gained[name] = (m.gained[name] or 0) + g end
+    end
+    local gained_total = inv.get_item_count() - w.total
+    m.watch = nil
+    return { gained_total = gained_total, exhausted = not e.valid, full = false }
+  end
+
+  local fits = #m.op_products == 0
+  for _, name in ipairs(m.op_products) do
+    if inv.can_insert({ name = name, count = 1 }) then fits = true end
+  end
+  if not fits then
+    c.mining_state = { mining = false }
+    m.watch = nil
+    return { gained_total = 0, exhausted = false, full = true }
+  end
+
+  local selected = false
+  pcall(function()
+    c.update_selected_entity(e.position)
+    selected = c.selected == e
+  end)
+  if not selected or game.tick - w.started > w.limit then
+    -- the engine can't be pointed at exactly this entity, or isn't mining it
+    c.mining_state = { mining = false }
+    w.script = true
+    m.remaining = nil
+    return nil
+  end
+  c.mining_state = { mining = true, position = e.position }
+  return nil
 end
 
 local function gained_list(m)
@@ -130,15 +184,19 @@ end
 
 local function tick_single(task, c)
   local e = task._entity
+  local result
   if not (e and e.valid) then
-    return { status = "failed", detail = "the target was mined or destroyed by someone else" }
+    -- the engine removes a rock or tree when it finishes mining it
+    if not task._mine.watch then
+      return { status = "failed", detail = "the target was mined or destroyed by someone else" }
+    end
+    result = run_mining_op(task, c, task._mine)
+  else
+    local reached = approach.ensure(task, c, e.position, c.resource_reach_distance)
+    if type(reached) == "table" then return reached end
+    if reached ~= "ok" then return nil end
+    result = run_mining_op(task, c, task._mine)
   end
-
-  local reached = approach.ensure(task, c, e.position, c.resource_reach_distance)
-  if type(reached) == "table" then return reached end
-  if reached ~= "ok" then return nil end
-
-  local result = run_mining_op(task, c, task._mine)
   if not result then return nil end
   if result.full then
     return {
@@ -212,11 +270,25 @@ end
 local function tick_composite(task, c)
   local m = task._mine
   local e = task._entity
+  if m.watch and not (e and e.valid) then
+    -- the op in progress ended with the entity (a rock or tree the engine just mined)
+    local done_op = run_mining_op(task, c, m)
+    if done_op and done_op.gained_total > 0 then
+      m.ops = m.ops + 1
+      if m.ops >= task.count then
+        return { status = "done", detail = composite_summary(task, m) }
+      end
+    end
+    c.mining_state = { mining = false }
+    task._entity = nil
+    e = nil
+  end
   if not (e and e.valid) then
     e = find_nearest_match(c, m.matcher)
     task._entity = e
     task._approach = nil
     m.remaining = nil
+    m.watch = nil
     if not e then
       if m.ops > 0 then
         return {
@@ -253,6 +325,9 @@ local function tick_composite(task, c)
   end
   if m.ops >= task.count then
     return { status = "done", detail = composite_summary(task, m) }
+  end
+  if result.exhausted then
+    c.mining_state = { mining = false }
   end
   return nil
 end

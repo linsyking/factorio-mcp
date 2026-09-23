@@ -45,6 +45,7 @@ function M.start(task)
       position = { x = anchor.x + e.position.x, y = anchor.y + e.position.y },
       direction = e.direction,
       recipe = e.recipe,
+      underground_type = e.underground_type,
     }
   end
   task.steps = steps

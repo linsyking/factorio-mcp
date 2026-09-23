@@ -7,7 +7,6 @@ from __future__ import annotations
 import asyncio
 import functools
 import time
-import uuid
 from collections import Counter
 from typing import Annotated, Any, Literal
 
@@ -15,6 +14,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, Field
 
+from . import checks
 from . import format as fmt
 from .bridge import JobResult, ModError, as_list
 from .game import Game
@@ -27,9 +27,18 @@ Items = Annotated[
 ]
 WaitS = Annotated[
     float | None,
-    Field(ge=0, le=600, description="seconds to wait for the job to finish before returning its id (default 30; 0 = return at once)"),
+    Field(ge=0, le=600, description="seconds to wait for the job to finish (default 0: queue it behind your other jobs and return at once; if a queued job fails, the jobs behind it are cancelled and you are told on your next call)"),
 ]
 Replace = Annotated[bool, Field(description="cancel your running and queued jobs first instead of queueing behind them")]
+class Endpoint(BaseModel):
+    """A route endpoint."""
+    x: float
+    y: float
+    direction: int | None = Field(None, ge=0, le=15, description="required belt direction at this end (16-way)")
+    port: Literal["tile", "drop", "pickup", "belt", "fluid"] = Field("tile", description=(
+        'tile = this tile; drop = the output tile of the drill/inserter at x,y; pickup = the pickup tile of the '
+        'inserter at x,y; belt = start: continue the belt at x,y, end: join the belt at x,y from behind or the side; '
+        'fluid = (pipes) a free fluid connection of the entity at x,y'))
 
 
 class Point(BaseModel):
@@ -44,13 +53,25 @@ class Placement(BaseModel):
     direction: int | None = Field(None, ge=0, le=15)
 
 
+class Point(BaseModel):
+    x: float
+    y: float
+
+
+DROP_TO = "inserters: the tile to drop into (a furnace, chest, belt...). Sets the direction for you"
+PICKUP_FROM = "inserters: the tile to pick up from. Sets the direction for you"
+
+
 class BuildStep(BaseModel):
     item: str = Field(description='item to place, e.g. "burner-mining-drill" (or "name@quality")')
     x: float
     y: float
-    direction: int | None = Field(None, ge=0, le=15)
+    direction: int | None = Field(None, ge=0, le=15, description="16-way; an inserter's direction is the side it picks up from")
+    drop_to: Point | None = Field(None, description=DROP_TO)
+    pickup_from: Point | None = Field(None, description=PICKUP_FROM)
     recipe: str | None = Field(None, description="recipe to set on the placed machine")
     insert: dict[str, int] | None = Field(None, description="items to move from your inventory into the placed entity")
+    underground_type: Literal["input", "output"] | None = Field(None, description="underground belts: input = entrance, output = exit")
 
 
 class PlanStep(BaseModel):
@@ -64,6 +85,9 @@ class PlanStep(BaseModel):
     resource: str | None = None
     item: str | None = None
     direction: int | None = Field(None, ge=0, le=15)
+    drop_to: Point | None = Field(None, description=DROP_TO)
+    pickup_from: Point | None = Field(None, description=PICKUP_FROM)
+    optional: bool | None = Field(None, description="true: if this step fails, the steps after it still run (e.g. a fuel top-up)")
 
 
 class TrainStop(BaseModel):
@@ -86,10 +110,51 @@ def _tool_errors(fn):
     return wrapper
 
 
+# Tools that already return chat, or run before a binding exists.
+NO_INBOX = {"read_chat", "wait_for_events", "status"}
+
+
 def register(app: MCPServer, game: Game) -> None:
+    async def inbox() -> str:
+        """Unread chat (players and other agents) since this character's cursor, as a
+        footer. Reading advances the cursor, so each line is delivered once."""
+        try:
+            b = await game.bridge()
+            msgs = as_list((await b.read_chat()).get("messages"))
+            evs = as_list((await b.read_events()).get("events"))
+        except Exception:
+            return ""
+        out = ""
+        if evs:
+            failed = any(e.get("kind") == "job_failed" for e in evs)
+            if failed:
+                game.new_queue()
+            more = f" (last 20 of {len(evs)})" if len(evs) > 20 else ""
+            out += f"\n\nEvents since your last call{more}:\n" + event_lines(evs[-20:])
+            if failed:
+                out += "\n(Jobs queued after a failed job were cancelled. Your next job starts a new queue.)"
+        if msgs:
+            more = f" (last 20 of {len(msgs)})" if len(msgs) > 20 else ""
+            out += f"\n\nNew chat{more}:\n" + chat_lines(msgs[-20:])
+        return out
+
+    def with_inbox(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            try:
+                out = await fn(*args, **kwargs)
+            except ToolError as e:
+                raise ToolError(str(e) + await inbox()) from e
+            return out + await inbox() if isinstance(out, str) else out
+
+        return wrapper
+
     def tool(description: str):
         def deco(fn):
-            app.tool(name=fn.__name__, description=description)(_tool_errors(fn))
+            wrapped = _tool_errors(fn)
+            if game.cfg.inbox and fn.__name__ not in NO_INBOX:
+                wrapped = with_inbox(wrapped)
+            app.tool(name=fn.__name__, description=description)(wrapped)
             return fn
 
         return deco
@@ -100,6 +165,8 @@ def register(app: MCPServer, game: Game) -> None:
     def describe(res: JobResult, waited: float) -> str:
         if res.status == "done":
             return f"Job #{res.job_id} ({res.type}) done: {res.detail}"
+        if res.status in ("failed", "cancelled"):
+            game.new_queue()  # the agent is being told: start a fresh queue
         if res.status == "failed":
             raise ToolError(f"Job #{res.job_id} ({res.type}) failed: {res.detail}")
         if res.status == "cancelled":
@@ -109,9 +176,54 @@ def register(app: MCPServer, game: Game) -> None:
             f"Use job_wait / job_status with job_id={res.job_id}, or job_cancel."
         )
 
-    async def run_job(task: dict[str, Any], wait_s: float | None, replace: bool = False) -> str:
+    def skipped() -> ToolError:
+        game.new_queue()
+        return ToolError("Not queued: a job queued earlier failed, so it and everything queued after it were "
+                         "cancelled (the failure is listed below or in get_events). Nothing from this call runs; "
+                         "your next job starts a new queue.")
+
+    def resolve_direction(x: float, y: float, direction: int | None, drop_to: Point | None,
+                          pickup_from: Point | None) -> int | None:
+        """drop_to / pickup_from -> the inserter direction (the side it picks up from)."""
+        if drop_to is None and pickup_from is None:
+            return direction
+        d = checks.inserter_direction(x, y, (drop_to.x, drop_to.y) if drop_to else None,
+                                      (pickup_from.x, pickup_from.y) if pickup_from else None)
+        if drop_to is not None and pickup_from is not None:
+            d2 = checks.inserter_direction(x, y, pickup_from=(pickup_from.x, pickup_from.y))
+            if d2 != d:
+                raise ValueError(f"drop_to and pickup_from at ({x}, {y}) aren't on opposite sides of the inserter")
+        if direction is not None and direction != d:
+            raise ValueError(f"direction {direction} at ({x}, {y}) contradicts drop_to/pickup_from, which need "
+                             f"direction {d} (an inserter's direction is the side it picks up from)")
+        return d
+
+    async def layout_check(steps: list[dict[str, Any]], protos: dict[str, Any] | None = None
+                           ) -> tuple[list[str], list[str]]:
+        """Belt-flow and inserter-end checks for planned placements (see checks.py)."""
+        try:
+            if protos is None:
+                names = sorted({st["item"].split("@")[0] for st in steps})
+                protos = {}
+                for i in range(0, len(names), 10):
+                    protos.update(await game.call("describe_prototype", {"names": names[i:i + 10]}))
+            plan = checks.planned(steps, protos)
+            if not any(pl.kind in ("transport-belt", "inserter") for pl in plan):
+                return [], []
+            area, points = checks.context_request(plan)
+            ctx = await game.call("layout_context", {"area": area, "points": points})
+            return checks.check_plan(plan, ctx)
+        except Exception as e:  # never let a check break a build
+            return [f"(layout check unavailable: {e})"], []
+
+    async def run_job(task: dict[str, Any], wait_s: float | None, replace: bool = False,
+                      optional: bool = False) -> str:
         b = await game.bridge()
-        r = await b.enqueue(task, replace=replace)
+        if replace:
+            game.new_queue()
+        r = await b.enqueue(task, replace=replace, chain=game.queue, optional=optional)
+        if r.get("cancelled"):
+            raise skipped()
         job_id = int(r["task_id"])
         waited = wait_default(wait_s)
         if waited <= 0:
@@ -332,10 +444,11 @@ def register(app: MCPServer, game: Game) -> None:
     def event_lines(evs: list[dict[str, Any]]) -> str:
         return "\n".join(f"[event #{e['id']} {e['kind']}] {e['text']}" for e in evs)
 
-    @tool("Chat messages since your last read (or since since_id): players and other agents; your own lines excluded.")
-    async def read_chat(since_id: Annotated[int | None, Field(ge=0)] = None) -> str:
+    @tool("Chat messages since your last read (or since since_id): players and other agents. Your own lines are "
+          "left out unless include_self (use since_id=0, include_self=true for a full transcript).")
+    async def read_chat(since_id: Annotated[int | None, Field(ge=0)] = None, include_self: bool = False) -> str:
         b = await game.bridge()
-        r = await b.read_chat(since_id)
+        r = await b.read_chat(since_id, include_self)
         msgs = as_list(r.get("messages"))
         return chat_lines(msgs[-50:]) if msgs else f"No new chat (last id {r.get('last_id')})."
 
@@ -347,7 +460,8 @@ def register(app: MCPServer, game: Game) -> None:
         evs = as_list(r.get("events"))
         return event_lines(evs[-50:]) if evs else f"No new events (last id {r.get('last_id')})."
 
-    @tool("Block until new chat or a new event arrives, or timeout_s passes (polls about twice per second).")
+    @tool("Block until new chat or a new event arrives (returns as soon as anything arrives), or timeout_s passes. "
+          "Use one wait per call and react to what it returns.")
     async def wait_for_events(timeout_s: Annotated[float, Field(ge=1, le=3600)] = 30) -> str:
         b = await game.bridge()
         deadline = time.monotonic() + timeout_s
@@ -411,7 +525,9 @@ def register(app: MCPServer, game: Game) -> None:
         return await run_job({"type": "follow_player", "player": player, "distance": distance}, 0, True)
 
     @tool("Mine by hand (vanilla mining time and reach): either the minable thing at x,y, or `count` mining operations "
-          'of a resource name ("iron-ore", "coal", "stone", "tree", "rock", ...) found on explored ground within 80 tiles.')
+          'of a resource name ("iron-ore", "coal", "stone", "tree", "rock", ...) found on explored ground within 80 tiles. '
+          "One operation = 1 ore from a patch, or one whole tree/rock: count=2 with \"rock\" mines two rocks "
+          "(a big rock gives about 20–25 stone).")
     async def mine(x: float | None = None, y: float | None = None, resource: str | None = None,
                    count: Annotated[int | None, Field(ge=1, le=200)] = None,
                    wait_s: WaitS = None, replace: Replace = False) -> str:
@@ -421,10 +537,17 @@ def register(app: MCPServer, game: Game) -> None:
         task = {"type": "mine", "resource": resource, "count": count} if resource else {"type": "mine", "target": pos}
         return await run_job(task, wait_s, replace)
 
-    @tool("Place a building from your inventory (walks within build range; normal placement rules).")
+    @tool("Place a building from your inventory (walks within build range, steps out of the footprint; normal "
+          "placement rules). Inserters: their direction is the side they pick up from (facing north = picks from the "
+          "north tile, drops south); or pass drop_to / pickup_from and the direction is worked out.")
     async def place_entity(item: str, x: Coord, y: Coord, direction: Direction | None = None,
+                           underground_type: Annotated[Literal["input", "output"] | None, Field(description="underground belts: input = entrance, output = exit")] = None,
+                           drop_to: Annotated[Point | None, Field(description=DROP_TO)] = None,
+                           pickup_from: Annotated[Point | None, Field(description=PICKUP_FROM)] = None,
                            wait_s: WaitS = None, replace: Replace = False) -> str:
-        return await run_job({"type": "place", "item": item, "position": {"x": x, "y": y}, "direction": direction}, wait_s, replace)
+        direction = resolve_direction(x, y, direction, drop_to, pickup_from)
+        return await run_job({"type": "place", "item": item, "position": {"x": x, "y": y}, "direction": direction,
+                              "underground_type": underground_type}, wait_s, replace)
 
     @tool("Hand-craft with your character's crafting queue (real crafting time; missing intermediates are queued too).")
     async def craft_items(recipe: str, count: Annotated[int, Field(ge=1, le=100)] = 1,
@@ -432,15 +555,18 @@ def register(app: MCPServer, game: Game) -> None:
         return await run_job({"type": "craft", "recipe": recipe, "count": count}, wait_s, replace)
 
     @tool("Move items from your inventory into the entity at x,y (walks within reach).")
-    async def insert_items(x: Coord, y: Coord, items: Items, wait_s: WaitS = None, replace: Replace = False) -> str:
-        return await run_job({"type": "insert", "target": {"x": x, "y": y}, "items": items}, wait_s, replace)
+    async def insert_items(x: Coord, y: Coord, items: Items, optional: Annotated[bool, Field(description="true: if this fails, the jobs queued after it still run (e.g. a fuel top-up)")] = False,
+                           wait_s: WaitS = None, replace: Replace = False) -> str:
+        return await run_job({"type": "insert", "target": {"x": x, "y": y}, "items": items}, wait_s, replace, optional)
 
-    @tool("Take items out of the entity at x,y into your inventory: specific counts, or all=true (walks within reach).")
-    async def extract_items(x: Coord, y: Coord, items: Items | None = None, all: bool = False,
+    @tool("Take items out of the entity at x,y into your inventory: specific counts, or all=true (walks within reach). "
+          "Works on belt tiles too (specific counts only; a full tile holds up to 8 items).")
+    async def extract_items(x: Coord, y: Coord, items: Items | None = None, all: bool = False, optional: Annotated[bool, Field(description="true: if this fails, the jobs queued after it still run (e.g. a fuel top-up)")] = False,
                             wait_s: WaitS = None, replace: Replace = False) -> str:
         if items is None and not all:
             raise ValueError("pass items with counts, or all=true")
-        return await run_job({"type": "extract", "target": {"x": x, "y": y}, "items": items, "all": all}, wait_s, replace)
+        return await run_job({"type": "extract", "target": {"x": x, "y": y}, "items": items, "all": all}, wait_s, replace,
+                             optional)
 
     @tool("Set the recipe of the crafting machine at x,y (walks within reach).")
     async def set_recipe(x: Coord, y: Coord, recipe: str, wait_s: WaitS = None, replace: Replace = False) -> str:
@@ -480,7 +606,8 @@ def register(app: MCPServer, game: Game) -> None:
             w, h = p.get("tile_width") or 1, p.get("tile_height") or 1
             if (s.direction or 0) in (4, 12):
                 w, h = h, w
-            rects.append((i, s.x - w / 2, s.y - h / 2, s.x + w / 2, s.y + h / 2))
+            sx, sy = checks.snap(s.x, int(w)), checks.snap(s.y, int(h))  # as the mod aligns it
+            rects.append((i, sx - w / 2, sy - h / 2, sx + w / 2, sy + h / 2))
         for a in range(len(rects)):
             for b_ in range(a + 1, len(rects)):
                 i, ax1, ay1, ax2, ay2 = rects[a]
@@ -504,12 +631,22 @@ def register(app: MCPServer, game: Game) -> None:
                      + (":" if blocked else "."))
         lines.extend("  " + b for b in blocked)
         lines.extend(problems)
+        warns, ins_lines = await layout_check(
+            [{"item": st.item, "x": st.x, "y": st.y, "direction": st.direction or 0} for st in steps], protos)
+        if ins_lines:
+            lines.append("Inserters:")
+            lines.extend("  " + ln for ln in ins_lines)
+        if warns:
+            lines.append("Layout warnings:")
+            lines.extend("  " + w for w in warns)
         return "\n".join(lines)
 
     @tool("Build many entities as ONE job: steps are placed in order (walking within build range, items from your "
           "inventory, normal placement rules), each optionally setting a recipe and inserting items. Failed steps are "
           "reported and skipped unless stop_on_error. auto_craft hand-crafts missing placeable items first. "
-          "dry_run=true only checks the plan (items, recipes, placement, overlaps) without building.")
+          "Inserter steps can give drop_to / pickup_from instead of a direction. Belt flow (dead-end corners, belts "
+          "facing each other) and what each inserter picks from / drops into are checked and reported as warnings. "
+          "dry_run=true only checks the plan (items, recipes, placement, overlaps, layout) without building.")
     async def build_plan(
         steps: Annotated[list[BuildStep], Field(min_length=1, max_length=100)],
         stop_on_error: bool = False,
@@ -518,12 +655,22 @@ def register(app: MCPServer, game: Game) -> None:
         wait_s: WaitS = None,
         replace: Replace = False,
     ) -> str:
+        for st in steps:
+            st.direction = resolve_direction(st.x, st.y, st.direction, st.drop_to, st.pickup_from)
         if dry_run:
             return await dry_run_plan(steps, auto_craft)
+        warns, _ = await layout_check([{"item": st.item, "x": st.x, "y": st.y, "direction": st.direction or 0}
+                                       for st in steps])
+        note = ("\nLayout warnings (the plan was queued anyway; fix with rotate_entity or cancel with job_cancel):\n"
+                + "\n".join("  " + w for w in warns)) if warns else ""
         task = {"type": "build_plan", "stop_on_error": stop_on_error, "auto_craft": auto_craft, "steps": [
-            {"item": s.item, "position": {"x": s.x, "y": s.y}, "direction": s.direction, "recipe": s.recipe, "insert": s.insert}
+            {"item": s.item, "position": {"x": s.x, "y": s.y}, "direction": s.direction, "recipe": s.recipe, "insert": s.insert,
+             "underground_type": s.underground_type}
             for s in steps]}
-        return await run_job(task, wait_s, replace)
+        try:
+            return await run_job(task, wait_s, replace) + note
+        except ToolError as e:
+            raise ToolError(str(e) + note) from e
 
     dry_run_plan = dry_run
 
@@ -546,32 +693,49 @@ def register(app: MCPServer, game: Game) -> None:
         return await run_job(task, wait_s, replace)
 
     @tool("Queue a sequence of actions (craft, insert, extract, mine, place, set_recipe, rotate, walk_to) as chained "
-          "jobs. If one fails, the rest of the chain is cancelled. Waits for the last one up to wait_s.")
+          "jobs. If one fails, the rest is cancelled, except that a step marked optional only reports its failure. "
+          "Place steps for inserters can give drop_to / pickup_from instead of a direction. Waits for the last one up "
+          "to wait_s and then lists every step's outcome.")
     async def run_plan(steps: Annotated[list[PlanStep], Field(min_length=1, max_length=25)],
                        wait_s: WaitS = None, replace: Replace = False) -> str:
         b = await game.bridge()
-        chain = uuid.uuid4().hex
+        if replace:
+            game.new_queue()
+        chain = game.queue
         ids: list[int] = []
         for i, s in enumerate(steps):
             d = s.model_dump(exclude_none=True)
+            optional = bool(d.pop("optional", False))
+            d.pop("drop_to", None), d.pop("pickup_from", None)
+            if s.type == "place" and (s.drop_to or s.pickup_from):
+                if s.x is None or s.y is None:
+                    raise ValueError(f"step {i + 1}: give x and y with drop_to / pickup_from")
+                d["direction"] = resolve_direction(s.x, s.y, s.direction, s.drop_to, s.pickup_from)
             x, y = d.pop("x", None), d.pop("y", None)
             if x is not None and y is not None:
                 d["position" if s.type == "place" else "target"] = {"x": x, "y": y}
-            r = await b.enqueue(d, replace=replace and i == 0, quiet=i < len(steps) - 1, chain=chain)
+            r = await b.enqueue(d, replace=replace and i == 0, quiet=i < len(steps) - 1, chain=chain, optional=optional)
             if r.get("cancelled"):
+                if not ids:
+                    raise skipped()
+                game.new_queue()
                 raise ToolError(f"queued {len(ids)} step(s), then an earlier step failed; the rest was skipped — see get_events")
             ids.append(int(r["task_id"]))
         waited = wait_default(wait_s)
-        head = f"Plan queued as jobs #{ids[0]}–#{ids[-1]}. "
+        head = "Plan queued: " + ", ".join(f"#{jid} {st.type}" for jid, st in zip(ids, steps)) + "."
         if waited <= 0:
-            return head.strip()
+            return head
         res = await b.wait_job(ids[-1], waited)
-        if res.status == "cancelled":
-            for jid in ids:
-                jr = await b.job(jid)
-                if jr.status == "failed":
-                    raise ToolError(head + f"Job #{jid} ({jr.type}) failed: {jr.detail}; the rest of the plan was cancelled.")
-        return head + describe(res, waited)
+        if not res.finished:
+            return head + "\n" + describe(res, waited)
+        outcomes = [await b.job(jid) for jid in ids]
+        lines = [head] + [f"  #{jr.job_id} {jr.type}: {jr.status}{' — ' + jr.detail if jr.detail else ''}"
+                          for jr in outcomes]
+        failed = next((jr for jr in outcomes if jr.status == "failed" and not steps[ids.index(jr.job_id)].optional), None)
+        if failed:
+            game.new_queue()
+            raise ToolError("\n".join(lines) + f"\nJob #{failed.job_id} ({failed.type}) failed; the steps after it were cancelled.")
+        return "\n".join(lines)
 
     @tool("Mine your force's own buildings back into your inventory (vanilla mining time): the nearest one at x,y, "
           "or all within area_radius (max 10 tiles, 50 buildings).")
@@ -599,6 +763,126 @@ def register(app: MCPServer, game: Game) -> None:
                           fuel: str | None = None) -> str:
         return await run_job({"type": "keep_fueled", "center": xy(x, y), "radius": radius, "fuel": fuel}, 0, True)
 
+    def segments(steps: list[dict[str, Any]]) -> list[str]:
+        """Run-length summary: consecutive same item+direction on one line."""
+        names = {0: "north", 4: "east", 8: "south", 12: "west"}
+        out, run = [], []
+        def flush():
+            if run:
+                a, b = run[0], run[-1]
+                kind = a.get("underground_type")
+                label = f"{a['item']}{' ' + ('entrance' if kind == 'input' else 'exit') if kind else ''}"
+                where = f"({a['x']}, {a['y']})" if len(run) == 1 else f"({a['x']}, {a['y']})–({b['x']}, {b['y']})"
+                facing = "" if a["item"] == "pipe" else f" facing {names.get(a['direction'], a['direction'])}"
+                out.append(f"  {len(run)} x {label}{facing} {where}")
+        for st in steps:
+            if run and st["item"] == run[-1]["item"] and (st["direction"] == run[-1]["direction"] or st["item"] == "pipe") \
+                    and not st.get("underground_type") and not run[-1].get("underground_type"):
+                run.append(st)
+            else:
+                flush()
+                run = [st]
+        flush()
+        return out
+
+    async def route(kind: str, params: dict[str, Any], build: bool, wait_s: float | None, replace: bool) -> str:
+        r = await game.call(f"route_{kind}", params)
+        steps = as_list(r.get("steps"))
+        lines = [f"Route {r['from']} -> {r['to']}: {r['length']} placements, {r.get('turns', 0)} turns, "
+                 f"{r.get('underground_pairs', 0)} underground pair(s); {r.get('expansions')} search expansions."]
+        lines.extend(segments(steps))
+        lines.append("Bill: " + fmt.items_text(r.get("bill")) + ".")
+        if r.get("missing"):
+            lines.append("Missing from your inventory: " + fmt.items_text(r["missing"]) + ".")
+        unavailable = as_list(r.get("unavailable"))
+        if unavailable:
+            lines.append("Not craftable now (recipe not unlocked) and not carried: " + ", ".join(unavailable) + ".")
+        if not r.get("underground_used"):
+            lines.append("Undergrounds were not used (disabled, or not carried and not craftable).")
+        mine_first = as_list(r.get("mine_first"))
+        if mine_first:
+            lines.append(f"{len(mine_first)} tree(s)/rock(s) on the path must be mined first: "
+                         + ", ".join(f"{o['name']} ({o['x']:.1f}, {o['y']:.1f})" for o in mine_first[:10])
+                         + ("…" if len(mine_first) > 10 else ""))
+        for e in as_list(r.get("effects")):
+            lines.append("Effect: " + e)
+        if not build:
+            lines.append("Nothing was built. Call again with build=true, or pass the placements to build_plan.")
+            return "\n".join(lines)
+        if unavailable:
+            raise ToolError("\n".join(lines) + "\nNot building: the route needs items you neither carry nor can craft.")
+        b = await game.bridge()
+        if replace:
+            game.new_queue()
+        chain = game.queue
+        ids: list[int] = []
+        tasks: list[dict[str, Any]] = [{"type": "mine", "target": {"x": o["x"], "y": o["y"]}} for o in mine_first]
+        for i in range(0, len(steps), 100):
+            tasks.append({"type": "build_plan", "stop_on_error": True, "auto_craft": True, "steps": [
+                {"item": s_["item"], "position": {"x": s_["x"], "y": s_["y"]}, "direction": s_["direction"],
+                 "underground_type": s_.get("underground_type")} for s_ in steps[i:i + 100]]})
+        for k, t in enumerate(tasks):
+            res = await b.enqueue(t, replace=replace and k == 0, quiet=k < len(tasks) - 1, chain=chain)
+            if res.get("cancelled"):
+                if not ids:
+                    raise skipped()
+                game.new_queue()
+                raise ToolError("an earlier step of the route build failed; the rest was cancelled — see get_events")
+            ids.append(int(res["task_id"]))
+        lines.append(f"Building as jobs #{ids[0]}–#{ids[-1]} ({len(tasks)} job(s)).")
+        waited = wait_default(wait_s)
+        if waited <= 0:
+            return "\n".join(lines)
+        res = await b.wait_job(ids[-1], waited)
+        if res.status == "cancelled":
+            for jid in ids:
+                jr = await b.job(jid)
+                if jr.status == "failed":
+                    game.new_queue()
+                    raise ToolError("\n".join(lines) + f"\nJob #{jid} ({jr.type}) failed: {jr.detail}; the rest was cancelled.")
+        lines.append(describe(res, waited))
+        return "\n".join(lines)
+
+    @tool("Plan a belt route between two points on explored ground and optionally build it (build=true queues normal "
+          "build jobs: items from your inventory, auto-crafted if missing). A* over tiles and facings with underground "
+          "belts to cross obstacles and other belts; never placed where a foreign belt, inserter or drill would "
+          "interact with it; checked for self side-loading. Returns placements, bill of materials, trees to mine "
+          "and the effect on a joined belt.")
+    async def route_belt(
+        start: Endpoint,
+        end: Endpoint,
+        belt: Literal["transport-belt", "fast-transport-belt", "express-transport-belt", "turbo-transport-belt"] = "transport-belt",
+        allow_underground: Annotated[bool | None, Field(description="default: only if you carry underground belts or can craft them")] = None,
+        clear_obstacles: Annotated[bool, Field(description="route through trees/rocks (they are mined first when building)")] = False,
+        margin: Annotated[int, Field(ge=2, le=40, description="tiles of search space around the endpoints")] = 12,
+        avoid: Annotated[list[list[float]] | None, Field(description="rectangles [x1,y1,x2,y2] to keep free")] = None,
+        planned_belts: Annotated[list[list[float]] | None, Field(description="belts planned but not built yet: [x,y,direction16]")] = None,
+        build: bool = False,
+        wait_s: WaitS = None,
+        replace: Replace = False,
+    ) -> str:
+        return await route("belt", {"from": start.model_dump(exclude_none=True), "to": end.model_dump(exclude_none=True), "belt": belt, "allow_underground": allow_underground,
+                                    "clear_obstacles": clear_obstacles, "margin": margin, "avoid": avoid,
+                                    "planned_belts": planned_belts}, build, wait_s, replace)
+
+    @tool("Plan a pipe route between two points on explored ground and optionally build it (build=true queues normal "
+          "build jobs). Pipes never touch foreign fluid connections (no fluid mixing); pipe-to-ground pairs pass "
+          "obstacles. Use port \"fluid\" to start or end at an entity's free fluid connection.")
+    async def route_pipe(
+        start: Endpoint,
+        end: Endpoint,
+        allow_underground: Annotated[bool | None, Field(description="default: only if you carry pipe-to-ground or can craft it")] = None,
+        clear_obstacles: bool = False,
+        margin: Annotated[int, Field(ge=2, le=40)] = 12,
+        avoid: Annotated[list[list[float]] | None, Field(description="rectangles [x1,y1,x2,y2] to keep free")] = None,
+        build: bool = False,
+        wait_s: WaitS = None,
+        replace: Replace = False,
+    ) -> str:
+        return await route("pipe", {"from": start.model_dump(exclude_none=True), "to": end.model_dump(exclude_none=True), "allow_underground": allow_underground,
+                                    "clear_obstacles": clear_obstacles, "margin": margin, "avoid": avoid},
+                           build, wait_s, replace)
+
     @tool("Status of one of your jobs, or (without job_id) your running job, queue and recently finished jobs.")
     async def job_status(job_id: int | None = None) -> str:
         b = await game.bridge()
@@ -625,4 +909,6 @@ def register(app: MCPServer, game: Game) -> None:
         if job_id is None and not all:
             raise ValueError("give job_id, or all=true")
         r = await game.call("cancel", {"all": True} if all else {"task_id": job_id})
+        if all:
+            game.new_queue()
         return f"Cancelled {r['cancelled']} job(s)."

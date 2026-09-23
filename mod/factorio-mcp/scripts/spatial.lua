@@ -18,6 +18,7 @@ local AREA_RING_STEP = 2
 local DESCRIBE_MAX_NAMES = 10
 
 local UPPER_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+local BELT_ARROW_SET = { ["^"] = true, [">"] = true, ["v"] = true, ["<"] = true }
 local LOWER_LETTERS = "abcdefghijklmnopqrstuvwxyz"
 
 -- ---------------------------------------------------------------- helpers
@@ -117,7 +118,14 @@ function M.scan_area(params)
     ["@"] = "you",
     ["P"] = "player or another agent character",
     ["E"] = "enemy",
+    ["^"] = "your transport belt moving north (toward smaller y)",
+    [">"] = "your transport belt moving east",
+    ["v"] = "your transport belt moving south (toward larger y)",
+    ["<"] = "your transport belt moving west",
   }
+  local BELT_ARROW = { [0] = "^", [4] = ">", [8] = "v", [12] = "<" }
+  -- Arrow keys are only listed when a belt is on screen.
+  local arrows_used = {}
 
   -- Letters are remembered per character, so the same building/resource
   -- keeps its symbol across scans (storage.scan_letters[character][name]).
@@ -128,6 +136,9 @@ function M.scan_area(params)
   for n, ch in pairs(mine) do taken[ch] = n end
   local function letter_for(name, alphabet)
     local ch = mine[name]
+    if ch and BELT_ARROW_SET[ch] then -- remembered before belts became arrows
+      mine[name], taken[ch], ch = nil, nil, nil
+    end
     if not ch then
       for i = 1, #alphabet do
         local cand = string.sub(alphabet, i, i)
@@ -191,6 +202,9 @@ function M.scan_area(params)
           ch, p = "P", PRIORITY.player
         elseif e.force == enemy_force then
           ch, p = "E", PRIORITY.enemy
+        elseif e.force == c.force and e.type == "transport-belt" and BELT_ARROW[e.direction] then
+          ch, p = BELT_ARROW[e.direction], PRIORITY.building
+          arrows_used[ch] = true
         elseif e.force == c.force then
           ch, p = letter_for(e.name, LOWER_LETTERS), PRIORITY.building
           footprint = true
@@ -226,6 +240,36 @@ function M.scan_area(params)
   for row = 1, size do
     grid[row] = table.concat(chars[row])
   end
+  for ch in pairs(BELT_ARROW_SET) do
+    if not arrows_used[ch] then legend[ch] = nil end
+  end
+
+  -- Inserters, with what is at each end: belt/inserter directions are the
+  -- most common building mistake, and a single letter can't show them.
+  local inserters = {}
+  local function thing_at(pos)
+    for _, t in ipairs(surface.find_entities_filtered({ position = pos, limit = 4 })) do
+      if t.valid and t.type ~= "character" and t.type ~= "resource" and t.type ~= "item-entity" then
+        return t.name
+      end
+    end
+    return "nothing"
+  end
+  for _, e in ipairs(entities) do
+    if e.valid and e.type == "inserter" and e.force == c.force and #inserters < 40 then
+      local ok = pcall(function()
+        inserters[#inserters + 1] = {
+          position = { x = e.position.x, y = e.position.y },
+          name = e.name,
+          pickup = { x = e.pickup_position.x, y = e.pickup_position.y },
+          pickup_from = thing_at(e.pickup_position),
+          drop = { x = e.drop_position.x, y = e.drop_position.y },
+          drop_into = thing_at(e.drop_position),
+        }
+      end)
+      if not ok then end
+    end
+  end
 
   return {
     origin = { x = ox, y = oy },
@@ -233,6 +277,7 @@ function M.scan_area(params)
     height = size,
     grid = grid,
     legend = legend,
+    inserters = inserters,
     note = "tile at grid[row][col] = map (origin.x+col, origin.y+row); rows run north to south."
       .. " Your force's buildings cover their whole footprint; other entities mark their center tile."
       .. " Letters stay the same for you across scans.",
@@ -279,6 +324,50 @@ local MAX_PLACEMENTS = 24
 -- [{item?, position = {x,y}, direction?}, ...] checks up to MAX_PLACEMENTS
 -- spots in ONE call (item falls back to the top-level one). Spot-checking a
 -- build one tile at a time costs the brain a full think per tile.
+-- layout_context {area = {x1, y1, x2, y2}, points = {{x, y}, ...}}: what a
+-- build check needs to know about the ground a plan will join: belts in the
+-- area (with direction) and the entity standing at each point. Known ground
+-- only; points on unexplored ground report "unexplored".
+function M.layout_context(params)
+  local c = companion.require_companion()
+  local surface = c.surface
+  local a = params.area
+  local belts = {}
+  if type(a) == "table" and #a == 4 then
+    local x1, y1 = math.min(a[1], a[3]), math.min(a[2], a[4])
+    local x2, y2 = math.max(a[1], a[3]), math.max(a[2], a[4])
+    x2, y2 = math.min(x2, x1 + 200), math.min(y2, y1 + 200)
+    local found = vision.filter_perceivable(surface.find_entities_filtered({
+      area = { { x1, y1 }, { x2, y2 } },
+      type = { "transport-belt", "underground-belt", "splitter" },
+    }), surface, c.force)
+    for _, e in ipairs(found) do
+      local b = { x = e.position.x, y = e.position.y, direction = e.direction, type = e.type, name = e.name }
+      if e.type == "underground-belt" then b.underground_type = e.belt_to_ground_type end
+      belts[#belts + 1] = b
+      if #belts >= 2000 then break end
+    end
+  end
+  local at = {}
+  for i, pt in ipairs(params.points or {}) do
+    if i > 400 then break end
+    local pos = { x = tonumber(pt.x) or tonumber(pt[1]) or 0, y = tonumber(pt.y) or tonumber(pt[2]) or 0 }
+    local name = "nothing"
+    if not vision.is_known(surface, c.force, pos) then
+      name = "unexplored"
+    else
+      for _, t in ipairs(surface.find_entities_filtered({ position = pos, limit = 6 })) do
+        if t.valid and t.type ~= "character" and t.type ~= "resource" and t.type ~= "item-entity" then
+          name = t.name
+          break
+        end
+      end
+    end
+    at[i] = name
+  end
+  return { belts = belts, at = at }
+end
+
 function M.can_place(params)
   local c = companion.require_companion()
   local surface = c.surface

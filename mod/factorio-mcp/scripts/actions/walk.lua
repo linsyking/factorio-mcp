@@ -168,10 +168,23 @@ function M.step(state, c, task_id)
         return nil
       end
       c.walking_state = { walking = false }
+      -- The goal itself may be an obstacle (a rock, a building): standing
+      -- right next to it is as close as anyone can get.
+      local remaining = math.sqrt(dist_sq(pos, state.target))
+      if remaining <= 3 then
+        local blocked = false
+        pcall(function()
+          blocked = not c.surface.can_place_entity({ name = "character", position = state.target })
+        end)
+        if blocked then
+          state.blocked_goal = true
+          return "arrived"
+        end
+      end
       return {
         failed = string.format(
           "got stuck at (%.1f, %.1f), still %.1f tiles from the target — water, cliffs or buildings may be in the way",
-          pos.x, pos.y, math.sqrt(dist_sq(pos, state.target))),
+          pos.x, pos.y, remaining),
       }
     end
     state.last_check_tick = game.tick
@@ -225,6 +238,11 @@ function M.tick(task)
   end
   local r = M.step(task._walk, c, task.id)
   if r == "arrived" then
+    if task._walk.blocked_goal then
+      return { status = "done", detail = string.format(
+        "arrived at (%.1f, %.1f), next to the goal — (%.1f, %.1f) itself is blocked (a rock, building or water)",
+        c.position.x, c.position.y, task.target.x, task.target.y) }
+    end
     return { status = "done", detail = string.format("arrived at (%.1f, %.1f)", c.position.x, c.position.y) }
   elseif type(r) == "table" then
     return { status = "failed", detail = r.failed }

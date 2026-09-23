@@ -1,5 +1,6 @@
 """Offline tests for the RCON client and bridge against a fake Factorio RCON
-server that splits responses into several packets and serves chunked envelopes."""
+server that answers like 2.0.77 (one packet per reply, possibly preceded by
+unrelated packets) and serves chunked envelopes."""
 
 import asyncio
 import json
@@ -15,8 +16,8 @@ from factorio_mcp.rcon import RconClient, RconError
 class FakeFactorio:
     """Minimal Source-RCON server. `handler(method, params) -> envelope dict`."""
 
-    def __init__(self, handler, password="pw", split=700):
-        self.handler, self.password, self.split = handler, password, split
+    def __init__(self, handler, password="pw", noise=True):
+        self.handler, self.password, self.noise = handler, password, noise
         self.commands: list[str] = []
         self.server = None
 
@@ -42,13 +43,11 @@ class FakeFactorio:
                 body = data[8:-2].decode()
                 if kind == 3:
                     writer.write(self._packet(req_id if body == self.password else -1, 2, b""))
-                elif body == " ":
-                    writer.write(self._packet(req_id, 0, b""))  # sentinel reply
                 else:
                     self.commands.append(body)
-                    out = self._respond(body).encode()
-                    for i in range(0, max(len(out), 1), self.split):  # multi-packet response
-                        writer.write(self._packet(req_id, 0, out[i:i + self.split]))
+                    if self.noise:  # a reply to some other id must be ignored
+                        writer.write(self._packet(req_id + 1000, 0, b"stray"))
+                    writer.write(self._packet(req_id, 0, self._respond(body).encode()))
                 await writer.drain()
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
@@ -80,9 +79,9 @@ def test_escape_lua_string():
     assert escape_lua_string('{"a":"b\\\\c"}') == '{\\"a\\":\\"b\\\\\\\\c\\"}'
 
 
-async def test_multi_packet_response_is_reassembled(fake):
-    big = "x" * 5000
-    f, port = await fake(lambda m, p: {"ok": True, "data": {"blob": big}}, split=500)
+async def test_large_reply_and_stray_packets(fake):
+    big = "x" * 50000
+    f, port = await fake(lambda m, p: {"ok": True, "data": {"blob": big}})
     b = Bridge(RconClient("127.0.0.1", port, "pw"), "scout-1", "session-1234")
     data = await b.call("get_state", {})
     assert data["blob"] == big
@@ -149,7 +148,7 @@ async def test_concurrent_clients_do_not_mix_replies(fake):
     def handler(method, params):
         return {"ok": True, "data": {"who": params.get("companion")}}
 
-    f, port = await fake(handler, split=64)
+    f, port = await fake(handler)
     bridges = [Bridge(RconClient("127.0.0.1", port, "pw"), f"agent-{i}") for i in range(8)]
 
     async def run(b):

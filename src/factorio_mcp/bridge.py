@@ -16,7 +16,7 @@ from typing import Any
 
 from .rcon import RconClient, RconError
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 UNSCOPED = {"ping", "echo", "get_chunk", "bind"}
 TERMINAL = {"done", "failed", "cancelled"}
 
@@ -123,10 +123,13 @@ class Bridge:
         replace: bool = False,
         quiet: bool = False,
         chain: str | None = None,
+        optional: bool = False,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {"task": task, "replace": replace, "quiet": quiet}
         if chain:
             params["chain"] = chain
+        if optional:
+            params["optional"] = True
         return await self.call("enqueue", params)
 
     async def job(self, job_id: int) -> JobResult:
@@ -146,8 +149,11 @@ class Bridge:
 
     # The read cursors live in the mod, per character: a new MCP session for
     # the same character continues where the previous one stopped reading.
-    async def read_chat(self, since_id: int | None = None) -> dict[str, Any]:
-        return await self.call("get_chat", {} if since_id is None else {"since_id": since_id})
+    async def read_chat(self, since_id: int | None = None, include_self: bool = False) -> dict[str, Any]:
+        params: dict[str, Any] = {} if since_id is None else {"since_id": since_id}
+        if include_self:
+            params["include_self"] = True
+        return await self.call("get_chat", params)
 
     async def read_events(self, since_id: int | None = None) -> dict[str, Any]:
         return await self.call("get_events", {} if since_id is None else {"since_id": since_id})

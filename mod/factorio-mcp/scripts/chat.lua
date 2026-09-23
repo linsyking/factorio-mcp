@@ -21,16 +21,18 @@ function M.on_console_chat(event)
   end
 end
 
--- Everything since the cursor except this character's own lines. Without
--- since_id the character's stored cursor is used; every read advances it.
+-- Everything since the cursor except this character's own lines (unless
+-- include_self, e.g. for a full transcript). Without since_id the
+-- character's stored cursor is used; every read advances it.
 function M.get(params)
+  local include_self = params.include_self == true
   local me = companion.context()
   storage.cursors = storage.cursors or {}
   local cur = storage.cursors[me]
   local since = tonumber(params.since_id) or (cur and cur.chat) or 0
   local out = {}
   for _, m in ipairs(storage.chat.messages) do
-    if m.id > since and not (m.bot and m.player == me) then
+    if m.id > since and (include_self or not (m.bot and m.player == me)) then
       out[#out + 1] = m
     end
   end

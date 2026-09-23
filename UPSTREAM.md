@@ -3,7 +3,7 @@
 factorio-mcp is a fork of **[matteomekhail/Agentic-Factorio](https://github.com/matteomekhail/Agentic-Factorio)**, which is MIT licensed (declared in its `package.json`). The fork point is commit `158dee7` ("merge: faster multi-agent gameplay", 2026-07-16).
 
 - **Kept, with changes:** the Lua mod (`mod/agentic-companion` became `mod/factorio-mcp`).
-- **Replaced:** the TypeScript companion app. The machine this was built on has no Node.js, so the MCP server was rewritten in Python using the official MCP SDK 2.x. The RCON sentinel technique, the envelope and chunking protocol, and the text formatters were ported from the TypeScript code.
+- **Replaced:** the TypeScript companion app. The machine this was built on has no Node.js, so the MCP server was rewritten in Python using the official MCP SDK 2.x. The envelope and chunking protocol and the text formatters were ported from the TypeScript code. The RCON sentinel technique was ported too, then dropped: with a player connected, Factorio can answer pipelined commands out of order, so the sentinel's reply overtook `bind` replies and they read as empty. The client now sends one command and waits for the packet with its id.
 
 ## Removed
 
@@ -34,6 +34,23 @@ factorio-mcp is a fork of **[matteomekhail/Agentic-Factorio](https://github.com/
 - **Quality:** item keys `name@quality` in inventories, insert/extract and placement.
 - **Freeplay start and respawn kits** from the scenario, so a new agent starts like a new player.
 - **`retire`** (test cleanup), a CLI (`doctor`, `call`, `tools`, `retire`, `package-mod`), `scripts/deploy_mod.sh`, and tests (Lua unit, pytest, live multi-agent).
+
+- **Queue-ahead jobs:** job tools return at once by default. All of a character's jobs share one chain, so a failure cancels everything queued behind it.
+- **News footer:** every tool result ends with finished or failed jobs, events and unread chat since the previous call.
+
+- **Build checks** (`checks.py`, `layout_context` RPC): belt-flow and inserter-end warnings in `build_plan`, `drop_to` / `pickup_from` for inserters, arrows for belts in `scan_area`.
+- **Belt lanes:** `inspect_entity` on a belt reports each lane (left/right of travel, with the compass side).
+- **Optional jobs, stop-on-failure batches, per-step `run_plan` results, strict tool arguments.**
+- **Engine mining:** hand-mining uses the engine's own mining (selected entity + `mining_state`). The character shows the mining animation, and timing and production statistics are vanilla. A script timer is the fallback when the engine can't be pointed at exactly the target.
+
+## Fixed after the collaboration and solo tests (research/factorio-agent/12, 13)
+
+- Whole-number positions of odd-sized entities are snapped to the tile centre (a belt at (92,−12) used to "fail unexpectedly").
+- `auto_craft` crafts ⌈missing / products per craft⌉ times (it used to make 18 spare belts for 18 placements).
+- Placing steps out of the footprint first when the character stands in it.
+- `walk_to` a blocked goal (a rock, a building) ends next to it instead of "stuck".
+- `read_chat` has `include_self` for full transcripts.
+- Clearer tool descriptions: what `mine`'s `count` means for rocks, inserter directions, and that `wait_for_events` returns at the first news.
 
 ## Fixed
 

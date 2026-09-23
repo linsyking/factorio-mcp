@@ -11,7 +11,19 @@ An MCP server that gives **one AI agent control of one Factorio character**, usi
   - items only ever come from and go to the character's own inventory;
   - new characters get the freeplay start kit and nothing else.
 - **Fog of war.** Agents perceive only explored ground and see enemies only while visible. This matters because the engine never charts the map for characters without a player.
-- **Jobs.** Walking, mining, crafting and building run as jobs on the character. Tools wait up to `wait_s`, then return a job id for `job_wait`, `job_status` or `job_cancel`.
+- **Jobs, queued ahead.** Walking, mining, crafting and building run as jobs on the character, in order.
+  - A job tool queues its job and returns at once (`wait_s` 0 by default), so an agent can queue a whole phase as if every step succeeds and keep thinking while the character works.
+  - All of a session's jobs form one chain. If one fails, the mod cancels everything queued behind it, and the next tool result reports it; the next job starts a new chain. The chain id is kept in `~/.local/state/factorio-mcp/queues.json`, so separate `factorio-mcp call` processes for a character share it.
+  - `job_wait`, `job_status` and `job_cancel` are there when the agent needs them.
+- **Build checks.**
+  - The `build_plan` dry run and its real result report belt-flow problems: a corner that dead-ends next to the belt it should turn into, and belts facing each other. They also say what every inserter picks from and drops into, and warn when one faces the wrong way.
+  - Inserters can be placed with `drop_to` / `pickup_from` instead of a direction.
+  - `scan_area` draws your belts as `^ > v <` and lists your inserters' ends.
+- **Batches that stop.**
+  - A multi-tool `factorio-mcp call` stops at the first failure.
+  - `run_plan` lists every step's outcome.
+  - Steps and inserts marked `optional` report their failure without cancelling the jobs behind them.
+- **Every tool result ends with news:** jobs finished or failed since the previous call, other events, and unread game chat from players and other agents. Agents never need to poll.
 
 **Production math** is a separate MCP server in [`calc/`](calc/) (`factorio-calc-mcp`, AGPL-3.0, wrapping FactorioCalc). It gives ratios, machine counts, mining drills and belts, and needs no game connection. Agents plan with it and act with this one.
 
@@ -54,7 +66,8 @@ uv run factorio-mcp tools       # list the tools and the server instructions
 | `FACTORIO_RCON_PASSWORD` | — | required |
 | `FACTORIO_CHARACTER` | `agent` | the character this instance controls, e.g. `scout-1` |
 | `FACTORIO_TAKEOVER` | `0` | `1` = take the character over even if another session holds it |
-| `FACTORIO_MCP_WAIT_S` | `30` | default `wait_s` for job tools |
+| `FACTORIO_MCP_WAIT_S` | `0` | default `wait_s` for job tools; 0 = queue and return at once |
+| `FACTORIO_MCP_INBOX` | `1` | append unread game chat (players, other agents) to every tool result, so agents never need to poll `read_chat`; `0` turns it off |
 
 Claude Code (`.mcp.json` in the project), one entry per agent:
 
@@ -72,7 +85,7 @@ Claude Code (`.mcp.json` in the project), one entry per agent:
 
 Without a native MCP client, `factorio-mcp call TOOL '{json}' TOOL2 …` runs tool calls through a real MCP client session.
 
-## Tools (44)
+## Tools (46)
 
 | Group | Tools |
 |---|---|
@@ -82,6 +95,7 @@ Without a native MCP client, `factorio-mcp call TOOL '{json}' TOOL2 …` runs to
 | Chat and events | `read_chat`, `get_events`, `wait_for_events` (long-poll), `say` |
 | Instant actions | `start_research`, `equip`, `exit_vehicle`, `set_train_schedule`, `respawn` |
 | Jobs | `walk_to`, `drive_to`, `follow_player`, `mine`, `place_entity`, `craft_items`, `insert_items`, `extract_items`, `set_recipe`, `rotate_entity`, `build_plan` (up to 100 steps, `dry_run`), `run_plan` (chained steps), `deconstruct`, `fight`, `defend_area`, `keep_fueled` |
+| Routing | `route_belt`, `route_pipe` (plan on explored ground; `build=true` queues normal build jobs) |
 | Job control | `job_status`, `job_wait`, `job_cancel` |
 
 Other conventions:
@@ -89,6 +103,33 @@ Other conventions:
 - Directions are 16-way: 0 = N, 4 = E, 8 = S, 12 = W.
 - The wire protocol is in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 - A comparison with the other Factorio MCPs is in [research/factorio-agent/11-comparison.md](../research/factorio-agent/11-comparison.md).
+
+## Routing
+
+`route_belt` and `route_pipe` plan a path between two endpoints and return it as build steps, an item bill and its side effects. With `build=true` they queue ordinary jobs: mine the obstacles in the way, then a `build_plan` of normal placements from the character's inventory.
+
+**Endpoints.** An endpoint is a tile, or a port of an existing entity: an inserter's `drop` or `pickup` tile, a drill's drop tile, a `belt` to join, or a `fluid` connection. A route that ends on a belt says whether it extends that belt, side-loads it, or turns it into a curve.
+
+**Search.** Weighted A* (weight 1.2) over (tile, direction) states:
+- Belts move straight, turn left or turn right.
+- Underground pairs jump 2 to `max_underground_distance` tiles. That is 5 for yellow belts and 10 for pipe-to-ground, read from the prototypes.
+- Costs: a step is 1, a turn +0.5, and an underground pair its span plus 4, so it is used only when it saves something. A tree or rock costs 3 (only with `clear_obstacles`), and a tile next to a foreign belt +0.2.
+
+**The grid.** It is built lazily from the game:
+- A tile is legal when a forced blueprint-ghost check of the belt or pipe fits there and no cliff overlaps it. Unexplored chunks are walls.
+- The router records the tiles other belts feed into, inserter pickup and drop tiles, drill drop tiles, and foreign pipe connections. Routes never feed into or side-load a foreign belt by accident, and never merge fluids.
+- `avoid` rectangles and `planned_belts` (belts you intend to build) are respected.
+
+**Checks.**
+- A validator replays the finished belt line and rejects accidental side-loads and mis-paired undergrounds. The offending states are banned and the search retried.
+- Undergrounds are used only if the character carries them or their recipe is unlocked; otherwise the route goes around.
+- Limits: the search box is at most 160 tiles a side, and a search stops after 200 000 expansions.
+
+**Credits.**
+- The forced-ghost legality check and the soft treatment of trees and rocks follow [FactorioMayor](https://github.com/khoyga007/FactorioMayor)'s route planner (`field.lua`).
+- The (tile, direction) state space and the underground-edge model follow [Factorio-SAT](https://github.com/R-O-C-K-E-T/Factorio-SAT)'s belt-routing encoding (GPL-3.0).
+
+This is a personal research project and is not distributed. The router's Lua is our own code, written from those designs; where the designs are GPL-3.0, treat `mod/factorio-mcp/scripts/route/` as GPL-3.0-or-later.
 
 ## Tests
 
@@ -108,7 +149,7 @@ FACTORIO_LIVE=1 FACTORIO_RCON_HOST=… FACTORIO_RCON_PASSWORD=… uv run pytest 
 
 ## Known limitations
 
-- **Not built in:** belt, pipe or pole routing tools; throughput/bottleneck analysis beyond `analyze_factory` and `production_stats`; module/beacon upgrade jobs; circuit and filter settings; space-platform tools.
+- **Not built in:** power-pole routing; multi-lane, splitter or balancer synthesis (the router makes one belt or pipe line at a time); throughput/bottleneck analysis beyond `analyze_factory` and `production_stats`; module/beacon upgrade jobs; circuit and filter settings; space-platform tools.
 - **Quality:** inventories, transfers and placement carry quality. Hand-crafting and production statistics are per item name.
 - **Surfaces:** characters spawn on Nauvis; perception and actions use the character's current surface.
 - **Pathfinder:** it knows terrain the agent hasn't seen. Goals are limited to explored ground plus 64 tiles.

@@ -71,6 +71,32 @@ local BELT_TYPES = {
   ["linked-belt"] = true,
 }
 
+-- Per lane: transport line indices alternate left/right of the direction of
+-- travel (1 = left, 2 = right; undergrounds and splitters add 3..8 the same way).
+local function collect_belt_lanes(e)
+  if not BELT_TYPES[e.type] then return nil end
+  local lanes = { left = {}, right = {} }
+  local max_index = 2
+  pcall(function() max_index = e.get_max_transport_line_index() end)
+  for i = 1, max_index do
+    local side = (i % 2 == 1) and lanes.left or lanes.right
+    local ok, line = pcall(e.get_transport_line, i)
+    if ok and line then
+      local ok2, contents = pcall(line.get_contents)
+      if ok2 and type(contents) == "table" then
+        for k, v in pairs(contents) do
+          if type(v) == "table" and v.name then
+            side[v.name] = (side[v.name] or 0) + (v.count or 0)
+          elseif type(v) == "number" then
+            side[k] = (side[k] or 0) + v
+          end
+        end
+      end
+    end
+  end
+  return lanes
+end
+
 local function collect_belt_contents(e)
   if not BELT_TYPES[e.type] then return nil end
   local totals = {}
@@ -249,6 +275,11 @@ local function inspect_one(params)
 
   local belt = collect_belt_contents(e)
   if belt then out.belt_contents = belt end
+  local lanes = collect_belt_lanes(e)
+  if lanes then
+    out.belt_lanes = lanes
+    out.belt_direction = e.direction
+  end
 
   collect_fluids(e, out)
 

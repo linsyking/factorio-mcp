@@ -5,6 +5,9 @@
 # Usage: scripts/deploy_mod.sh SSH_TARGET COMPOSE_DIR [CONTAINER]
 #   e.g.  scripts/deploy_mod.sh user@game-host /home/user/factorio factorio
 # Clients that join the server need the same mod version installed locally.
+# Optional: also publish the zip and a download page to a static web root on
+# the same host (e.g. served by Caddy):
+#   PUBLISH_DIR=/srv/site/factorio PUBLISH_SERVER_ADDRESS=host:34197 scripts/deploy_mod.sh ...
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -41,3 +44,8 @@ cd "$DIR" && docker compose restart >/dev/null
 sleep 8
 docker logs --tail 60 "$CONTAINER" 2>&1 | grep -E "Loading mod factorio-mcp|Error|error|Hosting game" | tail -5
 REMOTE
+
+if [ -n "${PUBLISH_DIR:-}" ]; then
+  ssh -o BatchMode=yes "$TARGET" "mkdir -p '$PUBLISH_DIR' && cat > '$PUBLISH_DIR/$NAME'" < "$ZIP"
+  ssh -o BatchMode=yes "$TARGET" "python3 - '$PUBLISH_DIR' ${PUBLISH_SERVER_ADDRESS:+--server '$PUBLISH_SERVER_ADDRESS'}" < scripts/publish_page.py
+fi

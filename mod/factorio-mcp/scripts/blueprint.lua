@@ -73,6 +73,7 @@ local function normalize(holder)
         direction = e.direction or 0,
         recipe = e.recipe,
         quality = (e.quality and e.quality ~= "normal") and e.quality or nil,
+        underground_type = (proto.type == "underground-belt") and e.type or nil,
       }
     end
   end

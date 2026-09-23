@@ -13,6 +13,29 @@ function M.footprint(proto, pos, direction)
   return { { pos.x + lt.x, pos.y + lt.y }, { pos.x + rb.x, pos.y + rb.y } }
 end
 
+-- Snap a requested position onto the tile grid the way the game aligns the
+-- entity: odd sizes sit on tile centres (x.5), even sizes on tile corners.
+-- (92, -12) for a 1x1 belt means tile (92, -12), i.e. (92.5, -11.5).
+-- Aligned positions are unchanged.
+function M.snap(proto, pos, direction)
+  local w, h = 1, 1
+  pcall(function() w, h = proto.tile_width or 1, proto.tile_height or 1 end)
+  local d = math.floor(tonumber(direction) or 0) % 16
+  if d == 4 or d == 12 then w, h = h, w end
+  local function s(v, n)
+    if n % 2 == 1 then return math.floor(v) + 0.5 end
+    return math.floor(v + 0.5)
+  end
+  return { x = s(pos.x, w), y = s(pos.y, h) }
+end
+
+-- Does the character stand inside this footprint? (Its own collision box is
+-- about 0.4 x 0.4 tiles.)
+function M.character_inside(c, area)
+  local p, r = c.position, 0.25
+  return p.x + r > area[1][1] and p.x - r < area[2][1] and p.y + r > area[1][2] and p.y - r < area[2][2]
+end
+
 local function is_water(surface, x, y)
   local ok, res = pcall(function()
     return surface.get_tile(math.floor(x), math.floor(y)).collides_with("water_tile")

@@ -18,8 +18,9 @@ local trains = require("scripts.trains")
 local events = require("scripts.events")
 local vision = require("scripts.vision")
 local stats = require("scripts.stats")
+local route = require("scripts.route.api")
 
-local PROTOCOL_VERSION = 5
+local PROTOCOL_VERSION = 6
 
 rpc.register("ping", function()
   return {
@@ -56,6 +57,7 @@ rpc.register("inspect", inspect.inspect)
 rpc.register("analyze_factory", analyze.analyze_factory)
 rpc.register("scan_area", spatial.scan_area)
 rpc.register("can_place", spatial.can_place)
+rpc.register("layout_context", spatial.layout_context)
 rpc.register("find_buildable_area", spatial.find_buildable_area)
 rpc.register("describe_prototype", spatial.describe_prototype)
 rpc.register("production_stats", stats.production_stats)
@@ -64,6 +66,8 @@ rpc.register("import_blueprint", blueprint.import)
 rpc.register("list_blueprints", blueprint.list)
 rpc.register("read_blueprint", blueprint.read)
 rpc.register("export_blueprint", blueprint.export)
+rpc.register("route_belt", route.route_belt)
+rpc.register("route_pipe", route.route_pipe)
 
 -- instant actions
 rpc.register("start_research", research.start_research)

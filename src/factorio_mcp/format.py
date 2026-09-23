@@ -122,9 +122,21 @@ def inspect(e: dict[str, Any]) -> str:
     if e.get("ore_remaining") is not None:
         target = f" (mining {e['mining_target']})" if e.get("mining_target") else ""
         parts.append(f"Ore left in its mining area: {num(e['ore_remaining'])} in {e.get('ore_tiles', 0)} tiles{target}.")
-    if "belt_contents" in e:
+    if "belt_contents" in e or "belt_lanes" in e:
         bc = e.get("belt_contents") or {}
-        parts.append(f"On the belt: {items_text(bc)}." if bc else "Nothing on the belt.")
+        lanes = e.get("belt_lanes")
+        d = e.get("belt_direction")
+        # left/right of the direction of travel, and which compass side that is
+        sides = {0: ("west", "east"), 4: ("north", "south"), 8: ("east", "west"), 12: ("south", "north")}
+        if isinstance(lanes, dict):
+            ls, rs = sides.get(d, ("", ""))
+            moving = {0: "north", 4: "east", 8: "south", 12: "west"}.get(d)
+            left = items_text(lanes.get("left") or {}) or "empty"
+            right = items_text(lanes.get("right") or {}) or "empty"
+            parts.append(f"On the belt{f' (moving {moving})' if moving else ''}: left lane"
+                         f"{f' ({ls} side)' if ls else ''}: {left}; right lane{f' ({rs} side)' if rs else ''}: {right}.")
+        else:
+            parts.append(f"On the belt: {items_text(bc)}." if bc else "Nothing on the belt.")
     if e.get("fluids"):
         parts.append("Fluids: " + ", ".join(f"{n} {num(q)}" for n, q in e["fluids"].items()) + ".")
     if e.get("no_fluids"):
@@ -145,6 +157,14 @@ def scan(r: dict[str, Any]) -> str:
         "Legend:",
         *[f"{k} = {v}" for k, v in (r.get("legend") or {}).items()],
     ]
+    ins = as_list(r.get("inserters"))
+    if ins:
+        lines.append("Your inserters (they pick up on one side and drop on the other):")
+        for i in ins:
+            pk, dp = i["pickup"], i["drop"]
+            lines.append(f"  {i['name']} at ({i['position']['x']:g}, {i['position']['y']:g}): picks from "
+                         f"{i['pickup_from']} at ({pk['x']:.1f}, {pk['y']:.1f}) -> drops into {i['drop_into']} "
+                         f"at ({dp['x']:.1f}, {dp['y']:.1f})")
     if r.get("note"):
         lines.append(r["note"])
     return "\n".join(lines)

@@ -9,7 +9,8 @@
 
 Connection settings come from flags or environment variables:
   FACTORIO_RCON_HOST, FACTORIO_RCON_PORT, FACTORIO_RCON_PASSWORD,
-  FACTORIO_CHARACTER (default "agent"), FACTORIO_TAKEOVER=1, FACTORIO_MCP_WAIT_S (default 30).
+  FACTORIO_CHARACTER (default "agent"), FACTORIO_TAKEOVER=1, FACTORIO_MCP_WAIT_S (default 0 = queue and return),
+  FACTORIO_MCP_INBOX=0 (don't append unread chat to tool results).
 """
 
 from __future__ import annotations
@@ -39,7 +40,8 @@ def config_from(args: argparse.Namespace) -> Config:
         password=args.password or os.environ.get("FACTORIO_RCON_PASSWORD", ""),
         character=args.character or os.environ.get("FACTORIO_CHARACTER", "agent"),
         takeover=args.takeover or _env_bool("FACTORIO_TAKEOVER"),
-        default_wait_s=float(os.environ.get("FACTORIO_MCP_WAIT_S", 30)),
+        default_wait_s=float(os.environ.get("FACTORIO_MCP_WAIT_S", 0)),
+        inbox=os.environ.get("FACTORIO_MCP_INBOX", "1").strip().lower() not in ("0", "false", "no", "off"),
     )
 
 
@@ -52,6 +54,7 @@ def _server_env(cfg: Config) -> dict[str, str]:
         "FACTORIO_CHARACTER": cfg.character,
         "FACTORIO_TAKEOVER": "1" if cfg.takeover else "0",
         "FACTORIO_MCP_WAIT_S": str(cfg.default_wait_s),
+        "FACTORIO_MCP_INBOX": "1" if cfg.inbox else "0",
     })
     return env
 
@@ -77,12 +80,21 @@ async def _call(cfg: Config, calls: list[tuple[str, dict]]) -> int:
     async with transport as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            for name, arguments in calls:
+            for i, (name, arguments) in enumerate(calls):
                 result = await session.call_tool(name, arguments)
                 flag = " [ERROR]" if result.is_error else ""
-                print(f"=== {name}{flag}\n{_content_text(result)}")
+                text = _content_text(result)
+                print(f"=== {name}{flag}\n{text}")
                 if result.is_error:
                     rc = 1
+                # Stop the batch at the first failure (a tool error, or a job
+                # failure reported in the news footer): the rest was planned on
+                # the assumption that everything before it worked.
+                if (result.is_error or "job_failed]" in text) and i + 1 < len(calls):
+                    rest = ", ".join(n for n, _ in calls[i + 1:])
+                    print(f"=== stopped: {name} reported a failure, so the remaining call(s) were not run: {rest}")
+                    rc = 1
+                    break
     return rc
 
 

@@ -39,6 +39,9 @@ local function malformed(step)
   if step.recipe ~= nil and type(step.recipe) ~= "string" then
     return "recipe must be a recipe name string"
   end
+  if step.underground_type ~= nil and step.underground_type ~= "input" and step.underground_type ~= "output" then
+    return 'underground_type must be "input" (entrance) or "output" (exit)'
+  end
   if step.insert ~= nil then
     if type(step.insert) ~= "table" then
       return 'insert must map item names to counts, e.g. {"coal":5}'
@@ -70,6 +73,12 @@ function M.start(task)
 
   for _, step in ipairs(task.steps) do
     step.direction = math.floor(tonumber(step.direction) or 0) % 16
+    -- Snap to the tile grid (not for blueprint steps, whose positions are exact).
+    if not step.entity then
+      local ip = prototypes.item[(items.parse(step.item))]
+      local ep = ip and ip.place_result
+      if ep then step.position = placement.snap(ep, step.position, step.direction) end
+    end
     if step.insert ~= nil then
       -- {"coal":10} → sorted {name, count} list for deterministic messages.
       local list = {}
@@ -101,8 +110,14 @@ function M.start(task)
       local missing = needed[name] - items.count(c, name)
       local recipe = c.force.recipes[base]
       if quality == "normal" and missing > 0 and recipe and recipe.enabled then
-        local started = c.begin_crafting({ count = missing, recipe = recipe.name or name })
-        task._auto_crafted = task._auto_crafted + started
+        -- One craft can make several (transport-belt: 2), so craft only as
+        -- many times as needed.
+        local per = 1
+        for _, prod in ipairs(recipe.products or {}) do
+          if prod.name == base and (prod.amount or 0) > 0 then per = prod.amount end
+        end
+        local started = c.begin_crafting({ count = math.ceil(missing / per), recipe = recipe.name or name })
+        task._auto_crafted = task._auto_crafted + started * per
       end
     end
   end
@@ -285,6 +300,13 @@ function M.tick(task)
     return advance(task, false, "no entity called '" .. step.entity .. "'")
   end
 
+  local aside = approach.step_aside(task, c,
+    placement.footprint(prototypes.entity[entity_name], step.position, step.direction))
+  if type(aside) == "table" then
+    return advance(task, false, aside.detail)
+  end
+  if aside ~= "ok" then return nil end
+
   local can_place = c.surface.can_place_entity({
     name = entity_name,
     position = step.position,
@@ -303,6 +325,7 @@ function M.tick(task)
     direction = step.direction,
     force = c.force,
     quality = item_quality,
+    type = step.underground_type, -- underground belts: "input" (entrance) or "output" (exit)
     raise_built = true,
   })
   if not built then
