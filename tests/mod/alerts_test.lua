@@ -15,7 +15,7 @@ end
 
 local S = { normal = 1, working = 2, no_power = 3, no_fuel = 4, output_full = 5,
   waiting_for_source_items = 6, no_minable_resources = 7, no_recipe = 8,
-  no_ammo = 9, full_output = 10 }
+  no_ammo = 9, full_output = 10, waiting_for_space_in_destination = 11 }
 local status_names = {}
 for n, v in pairs(S) do status_names[v] = n end
 _G.defines = { entity_status = S }
@@ -246,6 +246,63 @@ check(captured:find('"alerts":"ALERTS: no-power 11 (+2 since your last call)"', 
 -- unscoped methods never carry it
 rpc.dispatch("echo", '{"size":0}')
 check(not captured:find('"alerts"', 1, true), "unscoped (ping/echo/get_chunk/bind) responses carry no digest")
+
+-- ------------------------------------------- 0.2.20: the back-pressure knob
+
+-- waiting-for-space-in-destination never triggers, however big the delta
+found = join(many(S.no_power, 11), many(S.waiting_for_space_in_destination, 40))
+advance()
+check(alerts.line("agent") == nil, "a +40 waiting-for-space delta alone never triggers")
+found = join(many(S.no_power, 14), many(S.waiting_for_space_in_destination, 40))
+advance()
+check(alerts.line("agent") == "ALERTS: no-power 14 (+3 since your last call), waiting-for-space-in-destination 40",
+  "when the line fires for real reasons, waiting-for-space rides as a trailing count")
+found = many(S.no_power, 15)
+advance()
+check(alerts.line("agent") == "ALERTS: no-power 15 (+1 since your last call)",
+  "no trailing item when waiting-for-space is zero")
+
+-- the knob: default min_delta
+storage.alerts_config = { min_delta = 3, by_category = {} }
+found = many(S.no_power, 17)
+advance()
+check(alerts.line("agent") == nil, "with min_delta 3, a +2 change is below the bar")
+found = many(S.no_power, 20)
+advance()
+check(alerts.line("agent") == "ALERTS: no-power 20 (+3 since your last call)", "a +3 change clears the min_delta 3 bar")
+
+-- the knob: per-category override
+storage.alerts_config = { min_delta = 1, by_category = { no_power = 5 } }
+found = join(many(S.no_power, 21), many(S.no_fuel, 1))
+advance()
+check(alerts.line("agent") == "ALERTS: no-fuel 1 (+1 since your last call)",
+  "an override can hold no-power back while no-fuel still fires at 1")
+found = join(many(S.no_power, 27), many(S.no_fuel, 1))
+advance()
+check(alerts.line("agent") == "ALERTS: no-power 27 (+6 since your last call)", "crossing the override threshold fires")
+
+-- /alerts-threshold (alerts.on_command is the handler control.lua registers)
+storage.alerts_config = nil
+check(alerts.on_command({}) == "ALERTS thresholds: every category fires at |delta| >= 1. "
+  .. "waiting-for-space-in-destination never fires (back-pressure, trailing summary only)",
+  "no arguments shows the default")
+check(alerts.on_command({ parameter = "3" }) == "ALERTS: every category now fires at |delta| >= 3",
+  "one number sets the default")
+check(alerts.on_command({}) == "ALERTS thresholds: every category fires at |delta| >= 3. "
+  .. "waiting-for-space-in-destination never fires (back-pressure, trailing summary only)",
+  "the new default persists")
+check(alerts.on_command({ parameter = "no-power 5" }) == "ALERTS: no-power now fires at |delta| >= 5",
+  "hyphenated category names are accepted")
+check(storage.alerts_config.by_category.no_power == 5, "the override is persisted")
+check(alerts.on_command({ parameter = "no_power reset" }) == "ALERTS: no-power override cleared (back to default 3)",
+  "underscores work too, and reset clears the override")
+check(alerts.on_command({ parameter = "0" }):find("usage", 1, true), "0 is rejected")
+check(alerts.on_command({ parameter = "x" }):find("usage", 1, true), "non-numbers are rejected")
+check(alerts.on_command({ parameter = "waiting-for-space-in-destination 2" })
+  == "waiting-for-space-in-destination never fires (back-pressure, trailing summary only) — thresholds don't apply",
+  "the never-trigger category is refused")
+check(alerts.on_command({ parameter = "no-such 2" }):find("unknown category", 1, true),
+  "unknown categories are refused with the valid list")
 
 if failures > 0 then
   print("\n" .. failures .. " FAILURES")

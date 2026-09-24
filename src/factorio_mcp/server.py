@@ -35,9 +35,10 @@ Model of the world:
 - Every tool result ends with what happened since your previous call: your jobs that finished or failed, and events.
   It also lists game chat you haven't seen yet ("New chat:"), from players and other agents. Each line is shown once;
   read_chat and get_events re-read older lines with since_id.
-- When your force's warning counts change anywhere (machines losing power or fuel, dead drills, backed-up outputs...),
+- When your force's warning counts change anywhere (machines losing power or fuel, dead drills, outputs backing up...),
   your next tool result carries an ALERTS line, e.g. "ALERTS: no-power 38 (+38 since your last call)" — steady state
-  prints nothing. map_warnings gives the full punch list with positions.
+  prints nothing. waiting-for-space back-pressure never triggers the line; it only rides as a trailing summary count.
+  map_warnings gives the full punch list with positions.
 - Your character follows normal player mechanics: walking speed, hand-mining and crafting time, reach and build range,
   items come from and go to its own inventory, placement rules. Nothing is created from nothing.
 - Fog of war: you only perceive explored ground (chunks your character or your force has seen). Unexplored tiles

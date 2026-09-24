@@ -22,6 +22,7 @@ local route = require("scripts.route.api")
 local follow = require("scripts.follow")
 local status = require("scripts.status")
 local warnings = require("scripts.warnings")
+local alerts = require("scripts.alerts")
 local combat = require("scripts.combat")
 
 local PROTOCOL_VERSION = 6
@@ -48,6 +49,23 @@ rpc.register("retire", function()
   storage.tasks.by_companion[companion.context()] = nil
   return companion.retire()
 end)
+
+-- /alerts-threshold: the ALERTS digest's delta thresholds, tunable at runtime
+-- by server admins (RCON or in-game console) without a mod release.
+do
+  local function handler(e)
+    local msg = alerts.on_command(e) or "alerts-threshold: no output"
+    print(msg) -- console/RCON
+    if e and e.player_index then
+      pcall(function() game.get_player(e.player_index).print(msg) end)
+    end
+  end
+  local desc = "show or set ALERTS digest delta thresholds: no args = show; N = default for all; " ..
+    "<category> N (or 'reset') = one category"
+  if not pcall(commands.add_command, "alerts-threshold", desc, handler, { allowed_for_players = false }) then
+    commands.add_command("alerts-threshold", desc, handler) -- older API: no admin flag
+  end
+end
 
 -- chat / events
 rpc.register("get_chat", chat.get)
