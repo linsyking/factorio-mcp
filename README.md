@@ -89,12 +89,12 @@ Claude Code (`.mcp.json` in the project), one entry per agent:
 
 Without a native MCP client, `factorio-mcp call TOOL '{json}' TOOL2 …` runs tool calls through a real MCP client session.
 
-## Tools (52)
+## Tools (54)
 
 | Group | Tools |
 |---|---|
 | Session | `status` |
-| Perception | `map_overview` (the map screen: patches, rocks, water, enemy bases on all known ground, up to 640 tiles), `look_around` (up to 150 tiles), `check_inventory`, `inspect_entity` (up to 16 at once), `scan_area` (ASCII grid, `?` = unexplored, radius up to 120, downsampled above 40), `describe_prototype`, `analyze_factory`, `map_warnings` (every warning on charted ground, grouped by problem with positions), `can_place` (up to 24 at once), `find_buildable_area`, `production_stats` (items and fluids, 5s–1000h windows), `list_trains` |
+| Perception | `map_overview` (the map screen: patches, rocks, water, enemy bases on all known ground, up to 640 tiles), `look_around` (up to 150 tiles), `check_inventory`, `inspect_entity` (up to 16 at once), `scan_area` (ASCII grid, `?` = unexplored, radius up to 120, downsampled above 40), `describe_prototype`, `analyze_factory`, `map_warnings` (every warning on charted ground, grouped by problem with positions), `alerts` (the game's alert panel: under attack, turret out of ammo, destroyed, ...), `battle_report` (damaged entities, turrets with no ammo, enemy clusters with distances, recent combat), `can_place` (up to 24 at once), `find_buildable_area`, `production_stats` (items and fluids, 5s–1000h windows), `list_trains` |
 | Blueprints | `list_blueprints`, `read_blueprint`, `import_blueprint`, `export_blueprint` (explored area → string), `build_blueprint` (string or carried, up to 1000 entities) |
 | Chat and events | `read_chat`, `get_events`, `wait_for_events` (long-poll), `say`, `set_status` (a line for people watching) |
 | Instant actions | `start_research`, `equip`, `exit_vehicle`, `set_train_schedule`, `respawn` |

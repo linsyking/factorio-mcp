@@ -358,6 +358,62 @@ def register(app: MCPServer, game: Game) -> None:
                     lines.append(f"  {ent['name']} at ({ent['x']}, {ent['y']})")
         return "\n".join(lines)
 
+    @tool("The game's alert panel, read through any connected player of your force — the same warnings the human "
+          "player's map shows (under attack, turret out of ammo, entity destroyed, no items for construction, ...), "
+          "grouped by alert type with each alert's target, position and the tick it was raised. Force-wide "
+          "information; battle_report is the headless snapshot of the same ground.")
+    async def alerts() -> str:
+        r = await game.call("alerts", {})
+        if r.get("note"):
+            return f"Alert panel ('{r['surface']}'): {r['note']}."
+        groups = as_list(r.get("groups"))
+        if not groups:
+            return f"Alert panel ('{r['surface']}'): no alerts."
+        lines = [f"Alert panel ('{r['surface']}'), {len(groups)} type(s):"]
+        for g in groups:
+            lines.append(f"{g['type'].replace('_', ' ')}: {g['count']} alert(s)")
+            for a in as_list(g.get("alerts"))[:30]:
+                at = f" at ({a['x']}, {a['y']})" if a.get("x") is not None else ""
+                lines.append(f"  {a['name']}{at} (since tick {a['tick']})")
+        return "\n".join(lines)
+
+    @tool("Battlefield snapshot: your force's damaged entities (health below max, worst first — walls, turrets, "
+          "machines that took hits and need repair), turrets with no ammo, enemy clusters on charted ground with "
+          "the distance to your nearest entity (closest threat first), and recent combat events (attacked, under "
+          "attack, destroyed). Works headless — the alert panel read needs a connected player, this doesn't.")
+    async def battle_report(recent_s: Annotated[int, Field(ge=0, le=600)] = 60) -> str:
+        r = await game.call("battle_report", {"recent_s": recent_s})
+        lines = [f"Battlefield on '{r['surface']}' at tick {r['tick']}."]
+        damaged = as_list(r.get("damaged"))
+        if damaged:
+            lines.append(f"damaged (needs repair), {len(damaged)} entity(ies), worst first:")
+            for d in damaged:
+                lines.append(f"  {d['name']} at ({d['x']}, {d['y']}): {d['hp']}/{d['max_hp']} ({d['pct']}%)")
+        else:
+            lines.append("damaged: none — everything of ours is at full health.")
+        dry = as_list(r.get("turrets_no_ammo"))
+        if dry:
+            lines.append(f"turrets with NO ammo: {len(dry)}:")
+            for t in dry:
+                lines.append(f"  {t['name']} at ({t['x']}, {t['y']})")
+        clusters = as_list(r.get("enemy_clusters"))
+        if clusters:
+            lines.append("enemy clusters on charted ground, closest to our things first:")
+            for cl in clusters:
+                near = f", {cl['nearest']['distance']} tiles from our {cl['nearest']['name']}" if cl.get("nearest") else ""
+                types = ", ".join(f"{n} x{cnt}" for n, cnt in sorted(cl.get("types", {}).items(), key=lambda kv: -kv[1]))
+                names = ", ".join(cl.get("top_names") or [])
+                lines.append(f"  {cl['count']} enemies at ({cl['center']['x']}, {cl['center']['y']}) [{types}] "
+                             f"({names}){near}")
+        else:
+            lines.append("enemies on charted ground: none.")
+        recent = as_list(r.get("recent"))
+        if recent:
+            lines.append(f"recent combat (last {recent_s}s):")
+            for e in recent:
+                lines.append(f"  tick {e['tick']} [{e['kind'].replace('_', ' ')}] {e['text']}")
+        return "\n".join(lines)
+
     @tool("Machines of your force in an area (explored ground) grouped by problem — no power, low power, no fuel, "
           "missing ingredients (with which ingredient when detectable), output full, depleted ore, idle — plus power summary.")
     async def analyze_factory(radius: Annotated[float, Field(ge=5, le=150)] = 40) -> str:
@@ -629,9 +685,10 @@ def register(app: MCPServer, game: Game) -> None:
         return await run_job({"type": "place", "item": item, "position": {"x": x, "y": y}, "direction": direction,
                               "underground_type": underground_type, "fast_replace": fast_replace}, wait_s, replace)
 
-    @tool("Hand-craft with your character's crafting queue (real crafting time; missing intermediates are queued too). "
-          "count is the number of recipe executions: one transport-belt craft makes 2 belts, one copper-cable craft "
-          "makes 2 cables.")
+    @tool("Hand-craft with your character's crafting queue (real crafting time; missing intermediates are queued too "
+          "and reported). count is the number of recipe executions: one transport-belt craft makes 2 belts, one "
+          "copper-cable craft makes 2 cables. Ingredients come from what you carry, not from chests; completion "
+          "reports items made vs items in pocket, and the job fails with instructions if results can't fit.")
     async def craft_items(recipe: str, count: Annotated[int, Field(ge=1, le=1000)] = 1,
                           wait_s: WaitS = None, replace: Replace = False) -> str:
         return await run_job({"type": "craft", "recipe": recipe, "count": count}, wait_s, replace)

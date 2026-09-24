@@ -22,6 +22,7 @@ local route = require("scripts.route.api")
 local follow = require("scripts.follow")
 local status = require("scripts.status")
 local warnings = require("scripts.warnings")
+local combat = require("scripts.combat")
 
 local PROTOCOL_VERSION = 6
 
@@ -59,6 +60,8 @@ rpc.register("check_inventory", perceive.check_inventory)
 rpc.register("inspect", inspect.inspect)
 rpc.register("analyze_factory", analyze.analyze_factory)
 rpc.register("map_warnings", warnings.map_warnings)
+rpc.register("alerts", combat.alerts)
+rpc.register("battle_report", combat.report)
 rpc.register("scan_area", spatial.scan_area)
 rpc.register("can_place", spatial.can_place)
 rpc.register("layout_context", spatial.layout_context)
@@ -113,6 +116,7 @@ script.on_nth_tick(vision.UPDATE_TICKS, function()
   status.update_labels()
 end)
 script.on_event(defines.events.on_tick, tasks.on_tick)
+script.on_nth_tick(30, function() pcall(events.flush_combat) end)
 script.on_nth_tick(follow.CHECK_TICKS, follow.on_check)
 script.on_event(defines.events.on_gui_click, follow.on_gui_click)
 script.on_event({ defines.events.on_player_display_resolution_changed, defines.events.on_player_display_scale_changed },
@@ -122,8 +126,10 @@ script.on_event(defines.events.on_runtime_mod_setting_changed, function(e)
 end)
 follow.register_commands()
 script.on_event(defines.events.on_script_path_request_finished, walk.on_path_finished)
+-- damage/death handlers are force-filtered ("player"): characters get the
+-- personal event, other force entities the aggregated combat feed
 script.on_event(defines.events.on_entity_damaged, events.on_entity_damaged,
-  { { filter = "type", type = "character" } })
+  { { filter = "force", force = "player" } })
 script.on_event(defines.events.on_entity_died, events.on_entity_died,
-  { { filter = "type", type = "character" } })
+  { { filter = "force", force = "player" } })
 script.on_event(defines.events.on_research_finished, events.on_research_finished)

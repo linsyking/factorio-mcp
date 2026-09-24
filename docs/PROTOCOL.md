@@ -49,6 +49,8 @@ All results are filtered by fog of war (`scripts/vision.lua`):
 | `inspect {position} \| {targets≤16}` | Target must be known. Entities of other forces must be visible. The result carries `last_changed` ("what by whom (job #N) at tick T") when a job of this mod last placed, rotated or re-reciped the entity — the fleet shares one force, so that is the audit note for a machine found facing the wrong way |
 | `analyze_factory {radius}` | Own machines on known ground, grouped by problem |
 | `map_warnings` | Every own-force entity on charted ground with a problem status — the map screen's warning icons — grouped by problem with positions (nearest first, at most 60 per group, `more` counts the rest). Same problem classification as `analyze_factory` |
+| `alerts` | The game's alert panel, read through any connected player of the force (in 2.0 alerts live on players; the panel is force-wide information the human player watches). Grouped by alert type with each alert's target/position and the tick it was raised. Headless fallback: `battle_report` |
+| `battle_report {recent_s≤600}` | Battlefield snapshot: own-force entities below max health (worst first, at most 30), turrets with an empty ammo inventory, enemy clusters on charted ground (position-clustering; distance to the nearest own-force entity, closest threat first, at most 10), and recent combat events from the event log |
 | `scan_area {center?, radius≤30}` | ASCII grid; unknown tiles are `?` |
 | `can_place {item, position, direction} \| {placements≤24}` | Position must be known |
 | `find_buildable_area {width, height, near, max_distance}` | Known ground only |
@@ -57,7 +59,7 @@ All results are filtered by fog of war (`scripts/vision.lua`):
 | `list_trains`, `list_blueprints`, `read_blueprint`, `import_blueprint {string}` | Blueprints: only ones the character carries, or export strings |
 | `export_blueprint {area: [{x,y},{x,y}]}` | Own buildings in a known area of at most 200×200 tiles. Returns `{string, entity_counts, total_entities, size, anchor}` |
 | `get_chat {since_id}` | Everything after the cursor except this character's own lines. Agent lines have `bot: true` |
-| `get_events {since_id}` | Events for this character plus force-wide ones (`job_done`, `job_failed`, `attacked`, `died`, `research_finished`, `supply_warning`) |
+| `get_events {since_id}` | Events for this character plus force-wide ones (`job_done`, `job_failed`, `attacked`, `died`, `research_finished`, `supply_warning`, `under_attack`, `destroyed`, `craft_cancelled`). Combat: character damage is throttled to one `attacked` per 5s; other force entities' damage is aggregated into one force-wide `under_attack` per 5s window (worst first), and a force entity's death pushes `destroyed` immediately with the cause |
 
 | `route_belt {from, to, belt?, allow_underground?, clear_obstacles?, margin?, avoid?, planned_belts?}` | Plans one belt line on known ground (see `scripts/route/`). An endpoint is `{x, y, direction?, port}` with `port` ∈ `tile`, `drop`, `pickup`, `belt` or `fluid` (inserter/drill drop tile, inserter pickup tile, join an existing belt). `allow_underground` nil means: if carried or the recipe is enabled. The search box is the endpoints' bounding box plus `margin` (2–40), at most 160 tiles a side. Returns `steps [{item, x, y, direction, underground_type?}]`, `bill`, `missing`, `unavailable`, `mine_first` (trees and rocks on the path), `effects` (what joining the target belt does), `length`, `turns`, `underground_pairs`, `expansions`. No side effects: the MCP server turns the steps into mine and `build_plan` jobs when `build=true` |
 | `route_pipe {…}` | The same for pipes and pipe-to-ground. It never runs next to a foreign fluid connection, so fluids don't mix |
@@ -89,6 +91,15 @@ Task types:
 - combat and upkeep: `fight`, `defend_area`, `keep_fueled`
 
 Every task with a map target walks within reach first, and each movement goal is checked against the exploration rule.
+
+### Craft reporting
+
+`craft` jobs follow the engine's queue semantics, and their reports make the accounting visible:
+- `count` is recipe executions; a multi-output recipe yields its result per craft (poles: 2 per craft). The done line reports items made — `crafted 2x small-electric-pole -> 4 small-electric-pole (2 per craft)` — plus the net pocket delta when the character used items while it ran.
+- Ingredients are counted from what the character carries — chests don't count. A partial start says why: the chain-aware ceiling (`get_craftable_count`, intermediates included) and the directly short items.
+- `begin_crafting` auto-queues intermediates (greens queue inserters, circuits, cable…); the start report names the queue depth and the intermediate recipes.
+- A queue that makes no progress while the inventory is full fails the job with instructions: completed results are held back until slots free up (the engine holds them in the queue) while started crafts' ingredients are already spent — this is the "half delivered / items vanished" phenomenon, not an inventory desync.
+- Cancelling or failing a craft refunds what's queued; a `craft_cancelled` event reports what was already crafted and kept — products and intermediates both.
 
 ### Belt checks
 
