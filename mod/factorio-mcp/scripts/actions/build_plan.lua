@@ -11,11 +11,19 @@ local placement = require("scripts.placement")
 local items = require("scripts.items")
 local approach = require("scripts.actions.approach")
 local craft = require("scripts.actions.craft")
+local provenance = require("scripts.provenance")
 
 local M = {}
 
 local MAX_STEPS = 100
 local MAX_FAILURES_LISTED = 5
+
+-- 16-way direction numbers → names, for the provenance note (self-contained so
+-- the offline tests need no `defines` stub for it).
+local DIR_NAMES = {
+  [0] = "north", [2] = "northeast", [4] = "east", [6] = "southeast",
+  [8] = "south", [10] = "southwest", [12] = "west", [14] = "northwest",
+}
 
 -- ------------------------------------------------------------- validation
 
@@ -140,8 +148,9 @@ end
 
 
 -- Same rules as build.lua's set_recipe, applied to the freshly placed entity.
--- Returns nil on success, else a reason string.
-local function apply_recipe(c, e, recipe_name)
+-- Returns nil on success, else a reason string. `task` (optional) gets the
+-- change recorded in the entity's provenance.
+local function apply_recipe(c, e, recipe_name, task)
   local r = c.force.recipes[recipe_name]
   if not r then
     return "unknown recipe: '" .. recipe_name .. "'"
@@ -168,6 +177,7 @@ local function apply_recipe(c, e, recipe_name)
       end
     end
   end
+  if task then provenance.record(e, "set recipe to " .. recipe_name, task) end
   return nil
 end
 
@@ -357,6 +367,7 @@ function M.tick(task)
   end
   c.remove_item(items.spec(step.item, 1))
   task._placed = task._placed + 1
+  provenance.record(built, "placed" .. (DIR_NAMES[step.direction] and (" facing " .. DIR_NAMES[step.direction]) or ""), task)
   if built.valid and built.type == "underground-belt" then
     task._undergrounds = task._undergrounds or {}
     table.insert(task._undergrounds, built)
@@ -368,7 +379,7 @@ function M.tick(task)
     issues[#issues + 1] = "the placed entity vanished immediately (another mod removed it?)"
   else
     if step.recipe then
-      local why = apply_recipe(c, built, step.recipe)
+      local why = apply_recipe(c, built, step.recipe, task)
       if why then issues[#issues + 1] = why end
     end
     if step._insert then

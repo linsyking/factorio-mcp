@@ -1,6 +1,7 @@
 -- Inventory transfer actions: insert (companion → entity) and extract
 -- (entity → companion). Both approach within reach_distance first and report
--- per-item results including shortfalls.
+-- per-item results including shortfalls. Belt tiles work both ways through
+-- their transport lines (see belt_insert / belt_extract).
 local companion = require("scripts.companion")
 local approach = require("scripts.actions.approach")
 local items = require("scripts.items")
@@ -83,6 +84,38 @@ local function belt_insert(e, spec)
     end
   end)
   return n
+end
+
+-- The mirror of belt_insert: take `count` of `key` off this belt tile's own
+-- lanes (what is on the tile at this moment — items on belts move). A player
+-- can only get belt items by mining the belt; like belt_insert, this is the
+-- mod's affordance for feeding and draining belts (a full tile holds up to 8).
+local function belt_extract(e, key, count)
+  local name, quality = items.parse(key)
+  local n = 0
+  pcall(function()
+    local max_i = math.min(e.get_max_transport_line_index(), 2)
+    for i = 1, max_i do
+      if n >= count then break end
+      n = n + e.get_transport_line(i).remove_item({ name = name, quality = quality, count = count - n })
+    end
+  end)
+  return n
+end
+
+-- Everything on a belt tile's own lanes: {["coal"] = 4, ["iron-plate@rare"] = 1}
+local function belt_contents(e)
+  local out = {}
+  pcall(function()
+    local max_i = math.min(e.get_max_transport_line_index(), 2)
+    for i = 1, max_i do
+      for _, it in ipairs(e.get_transport_line(i).get_contents()) do
+        local k = items.key(it.name, it.quality)
+        out[k] = (out[k] or 0) + it.count
+      end
+    end
+  end)
+  return out
 end
 
 local function entity_insert(e, spec)
@@ -169,6 +202,8 @@ local function pull(c, source, is_inventory, key, count)
   local removed
   if is_inventory then
     removed = source.remove(items.spec(key, count))
+  elseif BELTS[source.type] then
+    removed = belt_extract(source, key, count)
   else
     removed = source.remove_item(items.spec(key, count))
   end
@@ -208,18 +243,30 @@ local function all_inventories(e)
 end
 
 local function extract_all(task, c, e)
-  local invs = all_inventories(e)
-  if #invs == 0 then
-    return { status = "failed", detail = "the " .. e.name .. " has no inventory I can empty" }
-  end
   local taken_by, total, anything = {}, 0, false
-  for _, inv in ipairs(invs) do
-    for name, count in pairs(items.inventory_map(inv)) do
+  if BELTS[e.type] then
+    -- a belt has no inventories: all=true takes everything on this tile's lanes
+    for key, count in pairs(belt_contents(e)) do
       anything = true
-      local kept = pull(c, inv, true, name, count)
+      local kept = pull(c, e, false, key, count)
       if kept > 0 then
-        taken_by[name] = (taken_by[name] or 0) + kept
+        taken_by[key] = (taken_by[key] or 0) + kept
         total = total + kept
+      end
+    end
+  else
+    local invs = all_inventories(e)
+    if #invs == 0 then
+      return { status = "failed", detail = "the " .. e.name .. " has no inventory I can empty" }
+    end
+    for _, inv in ipairs(invs) do
+      for name, count in pairs(items.inventory_map(inv)) do
+        anything = true
+        local kept = pull(c, inv, true, name, count)
+        if kept > 0 then
+          taken_by[name] = (taken_by[name] or 0) + kept
+          total = total + kept
+        end
       end
     end
   end

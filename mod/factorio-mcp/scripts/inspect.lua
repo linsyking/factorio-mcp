@@ -3,6 +3,7 @@
 local companion = require("scripts.companion")
 local vision = require("scripts.vision")
 local approach = require("scripts.actions.approach")
+local provenance = require("scripts.provenance")
 
 local M = {}
 
@@ -313,6 +314,14 @@ local function inspect_one(params)
     end)
     if e.type == "underground-belt" then out.underground = require("scripts.belts").underground_note(e) end
   end
+
+  -- who last changed this entity, when a job of this mod did (the fleet is
+  -- one force; any agent may rotate or replace a shared building — see
+  -- scripts/provenance.lua)
+  pcall(function()
+    local changed = provenance.note(e)
+    if changed then out.last_changed = changed end
+  end)
 
   collect_fluids(e, out)
 

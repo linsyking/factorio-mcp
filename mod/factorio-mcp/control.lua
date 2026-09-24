@@ -21,6 +21,7 @@ local stats = require("scripts.stats")
 local route = require("scripts.route.api")
 local follow = require("scripts.follow")
 local status = require("scripts.status")
+local warnings = require("scripts.warnings")
 
 local PROTOCOL_VERSION = 6
 
@@ -57,6 +58,7 @@ rpc.register("get_state", perceive.get_state)
 rpc.register("check_inventory", perceive.check_inventory)
 rpc.register("inspect", inspect.inspect)
 rpc.register("analyze_factory", analyze.analyze_factory)
+rpc.register("map_warnings", warnings.map_warnings)
 rpc.register("scan_area", spatial.scan_area)
 rpc.register("can_place", spatial.can_place)
 rpc.register("layout_context", spatial.layout_context)

@@ -5,6 +5,7 @@ local placement = require("scripts.placement")
 local items = require("scripts.items")
 local approach = require("scripts.actions.approach")
 local build_plan = require("scripts.actions.build_plan")
+local provenance = require("scripts.provenance")
 
 local M = {}
 
@@ -129,9 +130,11 @@ function M.place.tick(task)
     }
   end
   c.remove_item(items.spec(task.item, 1))
+  provenance.record(built, string.format("placed%s", task.direction ~= 0
+    and (" facing " .. dir_name(task.direction)) or ""), task)
   local recipe_note = ""
   if task.recipe ~= nil and built.valid then
-    local why = build_plan.apply_recipe(c, built, tostring(task.recipe))
+    local why = build_plan.apply_recipe(c, built, tostring(task.recipe), task)
     if why then
       return { status = "failed", detail = string.format("placed %s at (%.1f, %.1f), but %s",
         task.item, built.position.x, built.position.y, why) }
@@ -186,13 +189,23 @@ function M.rotate.tick(task)
     if not ok or e.direction ~= task.direction then
       return { status = "failed", detail = "the " .. e.name .. " can't face that way" }
     end
-    return { status = "done", detail = string.format("turned %s to face %s", e.name, dir_name(task.direction)) }
+    provenance.record(e, string.format("rotated to face %s", dir_name(task.direction)), task)
+    return {
+      status = "done",
+      detail = string.format("turned the %s at (%.1f, %.1f) to face %s",
+        e.name, e.position.x, e.position.y, dir_name(task.direction)),
+    }
   end
 
   if not e.rotate() then
     return { status = "failed", detail = "the " .. e.name .. " can't be rotated" }
   end
-  return { status = "done", detail = string.format("rotated %s — it now faces %s", e.name, dir_name(e.direction)) }
+  provenance.record(e, string.format("rotated to face %s", dir_name(e.direction)), task)
+  return {
+    status = "done",
+    detail = string.format("rotated the %s at (%.1f, %.1f) — it now faces %s",
+      e.name, e.position.x, e.position.y, dir_name(e.direction)),
+  }
 end
 
 -- ------------------------------------------------------------- set_recipe
@@ -260,6 +273,7 @@ function M.set_recipe.tick(task)
       end
     end
   end
+  provenance.record(e, string.format("set recipe to %s", task.recipe), task)
   return {
     status = "done",
     detail = string.format("set %s's recipe to %s%s%s", e.name, task.recipe,

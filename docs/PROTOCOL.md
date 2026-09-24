@@ -1,6 +1,6 @@
 # Protocol v6: MCP server ↔ game mod
 
-`ping` returns `protocol_version: 5`. The MCP server refuses to bind when the versions differ.
+`ping` returns `protocol_version: 6`. The MCP server refuses to bind when the versions differ.
 
 ## Transport
 
@@ -46,8 +46,9 @@ All results are filtered by fog of war (`scripts/vision.lua`):
 |---|---|
 | `get_state {radius≤80}` | The character, other agent characters, players, resource patches and trees (known ground), own buildings with status histograms, visible enemies, research, power, top production, `explored_chunks` |
 | `check_inventory` | Own inventory and equipment. Keys are `name`, or `name@quality` for non-normal quality |
-| `inspect {position} \| {targets≤16}` | Target must be known. Entities of other forces must be visible |
+| `inspect {position} \| {targets≤16}` | Target must be known. Entities of other forces must be visible. The result carries `last_changed` ("what by whom (job #N) at tick T") when a job of this mod last placed, rotated or re-reciped the entity — the fleet shares one force, so that is the audit note for a machine found facing the wrong way |
 | `analyze_factory {radius}` | Own machines on known ground, grouped by problem |
+| `map_warnings` | Every own-force entity on charted ground with a problem status — the map screen's warning icons — grouped by problem with positions (nearest first, at most 60 per group, `more` counts the rest). Same problem classification as `analyze_factory` |
 | `scan_area {center?, radius≤30}` | ASCII grid; unknown tiles are `?` |
 | `can_place {item, position, direction} \| {placements≤24}` | Position must be known |
 | `find_buildable_area {width, height, near, max_distance}` | Known ground only |

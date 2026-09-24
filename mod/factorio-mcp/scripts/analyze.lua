@@ -41,6 +41,20 @@ local PROBLEM_STATUSES = {
   networks_disconnected = true,
 }
 
+-- Shared with scripts/warnings.lua (the whole-map sweep): the same
+-- classification everywhere, so analyze_factory and map_warnings agree on
+-- what counts as a problem.
+M.PROBLEM_STATUSES = PROBLEM_STATUSES
+M.WORKING = WORKING
+
+function M.status_names()
+  local names = {}
+  for name, value in pairs(defines.entity_status) do
+    names[value] = name
+  end
+  return names
+end
+
 local function round_half(v)
   return math.floor(v * 2 + 0.5) / 2
 end

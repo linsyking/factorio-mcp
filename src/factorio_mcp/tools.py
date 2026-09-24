@@ -329,6 +329,35 @@ def register(app: MCPServer, game: Game) -> None:
         r = await game.call("describe_prototype", {"names": names})
         return "\n".join(fmt.prototype(n, r.get(n) or {"kind": "unknown"}) for n in names)
 
+    @tool("The map screen's warning icons as one list: every machine of your force on charted ground with a "
+          "problem status (not plugged into the electric network, no power, low power, no fuel, no recipe, missing "
+          "ingredients or fluid, output full, no minable resources, ...), grouped by problem with each machine's "
+          "position, nearest first. Ends with a separate, clearly-marked idle section (inserters waiting for items — "
+          "no map warning, usually normal). The whole-factory punch list; analyze_factory is the detailed local version.")
+    async def map_warnings() -> str:
+        r = await game.call("map_warnings", {})
+        groups = as_list(r.get("groups"))
+        problems = [g for g in groups if not g.get("idle")]
+        lines = [f"Checked {r['entities_checked']} of your force's entities on charted ground of '{r['surface']}': "
+                 f"{r.get('with_problems', 0)} with problems in {len(problems)} group(s)."]
+        for g in problems:
+            names = ", ".join(f"{n} x{cnt}" for n, cnt in sorted(g.get("by_name", {}).items(), key=lambda kv: -kv[1]))
+            more = f" (+{g['more']} more)" if g.get("more") else ""
+            lines.append(f"{g['problem'].replace('_', ' ')}: {g['count']} machine(s) [{names}]{more}")
+            for ent in as_list(g.get("entities")):
+                lines.append(f"  {ent['name']} at ({ent['x']}, {ent['y']})")
+        if not problems:
+            lines.append("No machines with problems — nothing on the map is showing a warning.")
+        for g in groups:
+            if g.get("idle"):
+                names = ", ".join(f"{n} x{cnt}" for n, cnt in sorted(g.get("by_name", {}).items(), key=lambda kv: -kv[1]))
+                more = f" (+{g['more']} more)" if g.get("more") else ""
+                lines.append(f"idle (no map warning, usually normal — the machine that should feed them is the real "
+                             f"signal): {g['problem'].replace('_', ' ')}: {g['count']} machine(s) [{names}]{more}")
+                for ent in as_list(g.get("entities")):
+                    lines.append(f"  {ent['name']} at ({ent['x']}, {ent['y']})")
+        return "\n".join(lines)
+
     @tool("Machines of your force in an area (explored ground) grouped by problem — no power, low power, no fuel, "
           "missing ingredients (with which ingredient when detectable), output full, depleted ore, idle — plus power summary.")
     async def analyze_factory(radius: Annotated[float, Field(ge=5, le=150)] = 40) -> str:
@@ -607,13 +636,15 @@ def register(app: MCPServer, game: Game) -> None:
                           wait_s: WaitS = None, replace: Replace = False) -> str:
         return await run_job({"type": "craft", "recipe": recipe, "count": count}, wait_s, replace)
 
-    @tool("Move items from your inventory into the entity at x,y (walks within reach).")
+    @tool("Move items from your inventory into the entity at x,y (walks within reach). "
+          "Belt tiles too: the items land on that tile's own lanes, up to 8 per tile.")
     async def insert_items(x: Coord, y: Coord, items: Items, optional: Annotated[bool, Field(description="true: if this fails, the jobs queued after it still run (e.g. a fuel top-up)")] = False,
                            wait_s: WaitS = None, replace: Replace = False) -> str:
         return await run_job({"type": "insert", "target": {"x": x, "y": y}, "items": items}, wait_s, replace, optional)
 
     @tool("Take items out of the entity at x,y into your inventory: specific counts, or all=true (walks within reach). "
-          "Works on belt tiles too (specific counts only; a full tile holds up to 8 items).")
+          "Belt tiles too: takes what is on that tile's lanes right now (a full tile holds up to 8 items; belts have no "
+          "other inventory, so all=true empties the tile).")
     async def extract_items(x: Coord, y: Coord, items: Items | None = None, all: bool = False, optional: Annotated[bool, Field(description="true: if this fails, the jobs queued after it still run (e.g. a fuel top-up)")] = False,
                             wait_s: WaitS = None, replace: Replace = False) -> str:
         if items is None and not all:

@@ -163,6 +163,8 @@ def inspect(e: dict[str, Any]) -> str:
         parts.append("Fluids: " + ", ".join(f"{n} {num(q)}" for n, q in e["fluids"].items()) + ".")
     if e.get("no_fluids"):
         parts.append("Fluid system: empty.")
+    if e.get("last_changed"):
+        parts.append(f"Last changed: {e['last_changed']}.")
     for inv_name, contents in (e.get("inventories") or {}).items():
         parts.append(f"{inv_name} inventory: {items_text(contents) or 'empty'}.")
     return " ".join(parts)

@@ -33,6 +33,9 @@ function M.init()
   storage.cursors = storage.cursors or {}
   -- per-character scan_area letters, stable across scans
   storage.scan_letters = storage.scan_letters or {}
+  -- last change per entity (unit_number) for the inspect_entity audit note
+  -- (see scripts/provenance.lua): { by_unit = {}, order = {} }
+  storage.provenance = storage.provenance or { by_unit = {}, order = {} }
 end
 
 return M
