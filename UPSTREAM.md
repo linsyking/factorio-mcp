@@ -45,6 +45,16 @@ factorio-mcp is a fork of **[matteomekhail/Agentic-Factorio](https://github.com/
 - **Optional jobs, stop-on-failure batches, per-step `run_plan` results, strict tool arguments.**
 - **Engine mining:** hand-mining uses the engine's own mining (selected entity + `mining_state`). The character shows the mining animation, and timing and production statistics are vanilla. A script timer is the fallback when the engine can't be pointed at exactly the target.
 
+## Underground pairing reports (mod 0.2.14; MCP-BUGS-RESPONSE.md, Update 3)
+
+- `trace_belt`, `inspect_entity`, `place_entity` and `build_plan` say how an underground belt is paired: "entrance paired with the exit at (x,y)", or "entrance with NO exit" plus the reason. The reasons are:
+  - an entrance in between;
+  - an exit already taken by a closer entrance;
+  - an underground facing the wrong way;
+  - nothing within reach.
+- A trace that stops at an unpaired entrance now says so, instead of describing the next underground. A belt that runs into the back of an exit is named as such.
+- `build_plan` ends with a warning for undergrounds it placed that are still unpaired.
+
 ## Fixed from the second campaign report (mod 0.2.13; MCP-BUGS-RESPONSE.md)
 
 - **Belt checks:** new `trace_belt` (legs, ends, feeders and takers, and each lane's contents and fill %) and `measure_belt` (items/min per lane against capacity; flowing, backed up or empty). `inspect_entity` on a belt says which belt it feeds and which feed it. The server instructions spell out that y grows south.

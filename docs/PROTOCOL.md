@@ -91,7 +91,7 @@ Every task with a map target walks within reach first, and each movement goal is
 
 ### Belt checks
 
-- `trace_belt {position}` follows the line through the belt at `position` both ways, up to 400 tiles each way, on known ground. It goes through turns, undergrounds and splitters.
+- `trace_belt {position}` follows the line through the belt at `position` both ways, up to 400 tiles each way, on known ground. It goes through turns, undergrounds and splitters. Underground legs carry a `note` on their pairing. A line that stops at an unpaired entrance says why it has no exit (`inspect_entity` returns the same text as `underground`).
   - It returns `{start, tiles, legs, begins, ends, fed_by, taken_by, lane_capacity_per_min}`.
   - Each leg is a run in one direction: `{from, to, tiles, moving, kind?, left, right, left_side, right_side, fill_left, fill_right}`. Lanes are named by the direction of travel, with the compass side they're on.
   - `ends` describes a dead end, a side-load onto another belt, a building the line faces, or unexplored ground.

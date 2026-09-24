@@ -138,6 +138,12 @@ function M.place.tick(task)
     end
     recipe_note = ", recipe " .. tostring(task.recipe)
   end
+  if built.valid and built.type == "underground-belt" then
+    -- say whether it paired: an unpaired entrance swallows nothing and passes nothing
+    local note, paired = require("scripts.belts").underground_note(built)
+    recipe_note = recipe_note .. " — underground " .. note
+      .. ((not paired and built.belt_to_ground_type == "input") and " (normal until you place its exit)" or "")
+  end
   return {
     status = "done",
     detail = string.format("placed %s at (%.1f, %.1f)%s%s",

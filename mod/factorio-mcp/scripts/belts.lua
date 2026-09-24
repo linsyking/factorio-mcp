@@ -57,6 +57,48 @@ local function lane_capacity(e, force)
   return speed * 4 * stack
 end
 
+local UNIT = { [0] = { 0, -1 }, [4] = { 1, 0 }, [8] = { 0, 1 }, [12] = { -1, 0 } }
+
+-- How an underground belt is paired, in words. An entrance (input) pairs with
+-- the first exit of the same kind ahead of it within its reach; an exit
+-- (output) with the first entrance behind it. Returns (text, paired).
+function M.underground_note(e)
+  if not (e and e.valid and e.type == "underground-belt") then return nil end
+  local input = e.belt_to_ground_type == "input"
+  local other = e.neighbours
+  if other then
+    return string.format("%s paired with the %s at (%.1f, %.1f)", input and "entrance" or "exit",
+      input and "exit" or "entrance", other.position.x, other.position.y), true
+  end
+  local reach = 5
+  pcall(function() reach = e.prototype.max_underground_distance or reach end)
+  local u = UNIT[e.direction] or { 0, 0 }
+  local sign = input and 1 or -1 -- an entrance looks ahead, an exit behind
+  local want = input and "exit" or "entrance"
+  local text = string.format("%s with NO %s — nothing goes through it", input and "entrance" or "exit", want)
+  for k = 1, reach do
+    local q = { x = e.position.x + sign * u[1] * k, y = e.position.y + sign * u[2] * k }
+    for _, t in ipairs(e.surface.find_entities_filtered({ position = q, radius = 0.3, name = e.name })) do
+      if t.valid and t ~= e then
+        local tin = t.belt_to_ground_type == "input"
+        local what = string.format("the %s at (%.1f, %.1f)", tin and "entrance" or "exit", t.position.x, t.position.y)
+        if t.direction ~= e.direction then
+          return string.format("%s; %s is in the way and faces %s, not %s", text, what,
+            DIR[t.direction] or tostring(t.direction), DIR[e.direction] or tostring(e.direction)), false
+        elseif tin == input then
+          return string.format("%s; %s is in between (two %ss can't pair; the one nearer the %s takes it)",
+            text, what, input and "entrance" or "exit", want), false
+        elseif t.neighbours then
+          return string.format("%s; %s is already paired with the %s at (%.1f, %.1f), which is closer", text, what,
+            input and "entrance" or "exit", t.neighbours.position.x, t.neighbours.position.y), false
+        end
+      end
+    end
+  end
+  return string.format("%s with NO %s within %d tiles %s of it — nothing goes through it",
+    input and "entrance" or "exit", want, reach, DIR[input and e.direction or (e.direction + 8) % 16] or "?"), false
+end
+
 local function next_down(e)
   if e.type == "underground-belt" and e.belt_to_ground_type == "input" then
     local n = e.neighbours
@@ -82,11 +124,18 @@ end
 
 -- What's in front of a belt that outputs to nothing.
 local function dead_end(c, e)
+  if e.type == "underground-belt" and e.belt_to_ground_type == "input" then
+    return "underground " .. M.underground_note(e)
+  end
   local d = e.direction
-  local u = ({ [0] = { 0, -1 }, [4] = { 1, 0 }, [8] = { 0, 1 }, [12] = { -1, 0 } })[d] or { 0, 0 }
+  local u = UNIT[d] or { 0, 0 }
   local front = { x = e.position.x + u[1], y = e.position.y + u[2] }
   for _, t in ipairs(c.surface.find_entities_filtered({ position = front, radius = 0.45 })) do
     if t.valid and t.type ~= "resource" and t.type ~= "item-entity" and t.type ~= "character" then
+      if t.type == "underground-belt" and t.belt_to_ground_type == "output" and t.direction == e.direction then
+        return string.format("runs into the back of the underground exit at (%.1f, %.1f) — an exit only puts items out;"
+          .. " to go under, this tile needs an entrance", t.position.x, t.position.y)
+      end
       if IS_BELT[t.type] then
         return string.format("faces the %s at (%.1f, %.1f), which doesn't take items from this side (it points %s)",
           t.name, t.position.x, t.position.y, DIR[t.direction] or tostring(t.direction))
@@ -140,7 +189,8 @@ function M.trace(params)
       or (e.type == "splitter" and "splitter" or nil)
     if not cur or cur.direction ~= e.direction or kind or cur.kind then
       cur = { direction = e.direction, from = pos(e), to = pos(e), tiles = 0, kind = kind,
-        left = {}, right = {}, n_left = 0, n_right = 0, first = i }
+        left = {}, right = {}, n_left = 0, n_right = 0, first = i,
+        note = e.type == "underground-belt" and M.underground_note(e) or nil }
       legs[#legs + 1] = cur
     end
     cur.to = pos(e)
@@ -194,6 +244,9 @@ function M.trace(params)
   local up_main = first and next_up(first) or {}
   if #line >= MAX_TILES then start_note = "(traced " .. MAX_TILES .. " tiles; the line goes on)"
   elseif first and #up_main > 0 then start_note = "continues on unexplored ground"
+  elseif first.type == "underground-belt" and first.belt_to_ground_type == "output" then
+    start_note = string.format("starts at the underground %s at (%.1f, %.1f)", M.underground_note(first),
+      first.position.x, first.position.y)
   else start_note = string.format("starts at (%.1f, %.1f): nothing feeds it from behind", first.position.x, first.position.y) end
   local end_note
   local outs = last and next_down(last) or {}

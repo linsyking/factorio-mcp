@@ -231,11 +231,23 @@ local function summary(task)
   return s
 end
 
+-- Undergrounds this plan placed that ended up without a partner.
+local function unpaired_note(task)
+  local notes = {}
+  for _, e in ipairs(task._undergrounds or {}) do
+    if e.valid and not e.neighbours and #notes < 3 then
+      notes[#notes + 1] = string.format("the underground at (%.1f, %.1f) is an %s", e.position.x, e.position.y,
+        require("scripts.belts").underground_note(e))
+    end
+  end
+  return #notes > 0 and (" — warning: " .. table.concat(notes, "; ")) or ""
+end
+
 local function finished(task)
   if task._placed == 0 then
     return { status = "failed", detail = summary(task) }
   end
-  return { status = "done", detail = summary(task) }
+  return { status = "done", detail = summary(task) .. unpaired_note(task) }
 end
 
 -- Record the current step's outcome and move to the next. Returns the task
@@ -345,6 +357,10 @@ function M.tick(task)
   end
   c.remove_item(items.spec(step.item, 1))
   task._placed = task._placed + 1
+  if built.valid and built.type == "underground-belt" then
+    task._undergrounds = task._undergrounds or {}
+    table.insert(task._undergrounds, built)
+  end
 
   -- Optional follow-ups on the entity we just placed.
   local issues = {}

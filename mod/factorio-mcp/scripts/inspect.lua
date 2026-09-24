@@ -311,6 +311,7 @@ local function inspect_one(params)
       for _, i in ipairs(bn.inputs or {}) do ins[#ins + 1] = xy(i) end
       out.belt_fed_by = ins
     end)
+    if e.type == "underground-belt" then out.underground = require("scripts.belts").underground_note(e) end
   end
 
   collect_fluids(e, out)

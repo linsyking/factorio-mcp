@@ -140,6 +140,8 @@ def inspect(e: dict[str, Any]) -> str:
             ins = as_list(e.get("belt_fed_by"))
             parts.append(("Feeds " + (f"the belt at ({f['x']}, {f['y']})" if f else "nothing (a dead end: items stop here)"))
                          + "; fed by " + (", ".join(f"({i['x']}, {i['y']})" for i in ins) if ins else "no belt") + ".")
+        if e.get("underground"):
+            parts.append(f"Underground {e['underground']}.")
         if isinstance(lanes, dict):
             ls, rs = sides.get(d, ("", ""))
             moving = {0: "north", 4: "east", 8: "south", 12: "west"}.get(d)
@@ -358,7 +360,7 @@ def belt_trace(r: dict[str, Any]) -> str:
     lines = [f"Belt line through ({r['start']['x']}, {r['start']['y']}): {r['tiles']} tiles, in the direction items move.",
              f"Begins: {r['begins']}."]
     for leg in as_list(r.get("legs")):
-        kind = f" [{leg['kind']}]" if leg.get("kind") else ""
+        kind = f" [{leg['kind']}{': ' + leg['note'] if leg.get('note') else ''}]" if leg.get("kind") else ""
         span = (f"({leg['from']['x']}, {leg['from']['y']})" if leg["tiles"] == 1 else
                 f"({leg['from']['x']}, {leg['from']['y']}) → ({leg['to']['x']}, {leg['to']['y']})")
         lines.append(f"  {span}{kind}: moving {leg['moving']}, {leg['tiles']} tile(s); "

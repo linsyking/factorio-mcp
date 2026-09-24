@@ -112,5 +112,37 @@ end
 check(res2 and res2.detail:find("NOT MOVING", 1, true) and res2.detail:find("0/min", 1, true),
   "measure: items that stay put are reported as backed up, 0/min")
 
+-- underground pairing, the P4 case: entrances at x=31.5 and 30.5 facing west,
+-- an entrance at 28.5 paired with the exit at 27.5
+local ugs = {}
+local ug_surface = {
+  find_entities_filtered = function(f)
+    local out = {}
+    for _, u in ipairs(ugs) do
+      if math.abs(u.position.x - f.position.x) < 0.5 and math.abs(u.position.y - f.position.y) < 0.5 then out[#out + 1] = u end
+    end
+    return out
+  end,
+}
+local function ug(x, kind)
+  local u = { valid = true, type = "underground-belt", name = "underground-belt", direction = 12, belt_to_ground_type = kind,
+    position = { x = x, y = 45.5 }, surface = ug_surface, prototype = { max_underground_distance = 5 } }
+  ugs[#ugs + 1] = u
+  return u
+end
+local e31, e30, e28, x27 = ug(31.5, "input"), ug(30.5, "input"), ug(28.5, "input"), ug(27.5, "output")
+e28.neighbours, x27.neighbours = x27, e28
+local t31 = belts_mod.underground_note(e31)
+check(t31:find("NO exit", 1, true) and t31:find("entrance at (30.5, 45.5) is in between", 1, true),
+  "underground: an entrance behind another entrance is reported unpaired, naming the one in between")
+check(belts_mod.underground_note(e28):find("paired with the exit at (27.5, 45.5)", 1, true),
+  "underground: a paired entrance names its exit")
+ugs = { e30, x27 }
+check(belts_mod.underground_note(e30):find("already paired with the entrance at (28.5, 45.5)", 1, true),
+  "underground: an exit taken by a nearer entrance is named")
+local lone = ug(10.5, "output")
+check(belts_mod.underground_note(lone):find("NO entrance within 5 tiles east", 1, true),
+  "underground: a lone exit looks behind it (east of a west-facing exit)")
+
 print(failures == 0 and "\nALL TESTS PASSED" or ("\n" .. failures .. " FAILURES"))
 os.exit(failures == 0 and 0 or 1)
