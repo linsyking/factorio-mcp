@@ -20,7 +20,9 @@ from .bridge import JobResult, ModError, as_list
 from .game import Game
 
 Coord = Annotated[float, Field(description="map coordinate in tiles (x grows east, y grows south)")]
-Direction = Annotated[int, Field(ge=0, le=15, description="16-way direction: 0=north, 4=east, 8=south, 12=west")]
+Direction = Annotated[int, Field(ge=0, le=15, description="16-way direction: 0=north, 4=east, 8=south, 12=west. "
+              "An inserter's direction is the side it PICKS UP FROM — facing north it picks from the north tile and "
+              "drops south, NOT where it drops (easy to get backwards; drop_to/pickup_from compute it for you)")]
 Items = Annotated[
     dict[str, int],
     Field(description='item name -> count, e.g. {"coal": 10}; other qualities as "name@quality", e.g. "iron-plate@rare"'),
@@ -50,7 +52,7 @@ class Placement(BaseModel):
     item: str | None = Field(None, description="defaults to the top-level item")
     x: float
     y: float
-    direction: int | None = Field(None, ge=0, le=15)
+    direction: int | None = Field(None, ge=0, le=15, description="16-way; an inserter's direction is the side it picks up from")
 
 
 class Point(BaseModel):
@@ -91,7 +93,9 @@ class PlanStep(BaseModel):
     all: bool | None = None
     resource: str | None = None
     item: str | None = None
-    direction: int | None = Field(None, ge=0, le=15)
+    direction: int | None = Field(None, ge=0, le=15, description="16-way (0=north, 4=east, 8=south, 12=west); "
+                                                                  "place/rotate: an inserter's direction is the side it "
+                                                                  "PICKS UP FROM, not where it drops")
     drop_to: Point | None = Field(None, description=DROP_TO)
     pickup_from: Point | None = Field(None, description=PICKUP_FROM)
     optional: bool | None = Field(None, description="true: if this step fails, the steps after it still run (e.g. a fuel top-up)")
@@ -763,7 +767,9 @@ def register(app: MCPServer, game: Game) -> None:
     async def set_recipe(x: Coord, y: Coord, recipe: str, wait_s: WaitS = None, replace: Replace = False) -> str:
         return await run_job({"type": "set_recipe", "target": {"x": x, "y": y}, "recipe": recipe}, wait_s, replace)
 
-    @tool("Rotate the entity at x,y one step, or to a 16-way direction (walks within reach).")
+    @tool("Rotate the entity at x,y one step, or to a 16-way direction (walks within reach). An inserter's "
+          "direction is the side it PICKS UP FROM — facing north it picks from the north tile and drops south, "
+          "NOT where it drops.")
     async def rotate_entity(x: Coord, y: Coord, direction: Direction | None = None,
                             wait_s: WaitS = None, replace: Replace = False) -> str:
         return await run_job({"type": "rotate", "target": {"x": x, "y": y}, "direction": direction}, wait_s, replace)
@@ -835,7 +841,9 @@ def register(app: MCPServer, game: Game) -> None:
     @tool("Build many entities as ONE job: steps are placed in order (walking within build range, items from your "
           "inventory, normal placement rules), each optionally setting a recipe and inserting items. Failed steps are "
           "reported and skipped unless stop_on_error. auto_craft hand-crafts missing placeable items first. "
-          "Inserter steps can give drop_to / pickup_from instead of a direction. Belt flow (dead-end corners, belts "
+          "Inserter steps can give drop_to / pickup_from instead of a direction — preferred, because an inserter's "
+          "direction integer is the side it PICKS UP FROM (facing north it picks from the north tile and drops "
+          "south), which is easy to get backwards. Belt flow (dead-end corners, belts "
           "facing each other), what each inserter picks from / drops into, and every mining drill's one output tile "
           "(warning when neither the plan nor the ground puts a receiver on it) are checked and reported as "
           "warnings. dry_run=true only checks the plan (items, recipes, placement, overlaps, layout) without "
@@ -887,8 +895,9 @@ def register(app: MCPServer, game: Game) -> None:
 
     @tool("Queue a sequence of actions (craft, insert, extract, mine, place, set_recipe, rotate, walk_to, pick_up) as "
           "chained jobs. If one fails, the rest is cancelled, except that a step marked optional only reports its "
-          "failure. Place steps for inserters can give drop_to / pickup_from instead of a direction. Waits for the last "
-          "one up to wait_s and then lists every step's outcome.")
+          "failure. Place steps for inserters can give drop_to / pickup_from instead of a direction (an inserter's "
+          "direction is the side it PICKS UP FROM — facing north it picks from the north tile and drops south, not "
+          "where it drops). Waits for the last one up to wait_s and then lists every step's outcome.")
     async def run_plan(steps: Annotated[list[PlanStep], Field(min_length=1, max_length=25)],
                        wait_s: WaitS = None, replace: Replace = False) -> str:
         b = await game.bridge()

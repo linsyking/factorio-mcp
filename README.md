@@ -18,7 +18,7 @@ An MCP server that gives **one AI agent control of one Factorio character**, usi
 - **Build checks.**
   - The `build_plan` dry run and its real result report belt-flow problems: a corner that dead-ends next to the belt it should turn into, and belts facing each other. They also say what every inserter picks from and drops into, and warn when one faces the wrong way.
   - A mining drill outputs onto exactly one tile — the middle tile of its facing side, next to the footprint; a belt beside the drill collects nothing. Checks warn when neither the plan nor the ground puts a receiver (belt/chest/machine) on that tile, for drills the plan places and for existing drills near it.
-  - Inserters can be placed with `drop_to` / `pickup_from` instead of a direction.
+  - Inserters can be placed with `drop_to` / `pickup_from` instead of a direction — preferred, because an inserter's direction integer is the side it PICKS UP FROM (facing north it picks from the north tile and drops south), the opposite of the pointing-at-the-drop-target reading. The scan footer lists each inserter's direction with its two ends, so a placement can be verified at a glance.
   - `scan_area` draws your belts as `^ > v <` and lists your inserters' ends, and every mining drill's output tile with what stands there (drills with an empty output or no minable resources first).
 - **Batches that stop.**
   - A multi-tool `factorio-mcp call` stops at the first failure.

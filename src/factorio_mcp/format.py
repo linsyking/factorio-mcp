@@ -202,10 +202,12 @@ def scan(r: dict[str, Any]) -> str:
     ]
     ins = as_list(r.get("inserters"))
     if ins:
-        lines.append("Your inserters (they pick up on one side and drop on the other):")
+        lines.append("Your inserters (their direction is the side they PICK UP FROM — facing north they pick from "
+                     "the north tile and drop south):")
         for i in ins:
             pk, dp = i["pickup"], i["drop"]
-            lines.append(f"  {i['name']} at ({i['position']['x']:g}, {i['position']['y']:g}): picks from "
+            facing = f" facing {dir_name(i['direction'])}" if i.get("direction") is not None else ""
+            lines.append(f"  {i['name']} at ({i['position']['x']:g}, {i['position']['y']:g}){facing}: picks from "
                          f"{i['pickup_from']} at ({pk['x']:.1f}, {pk['y']:.1f}) -> drops into {i['drop_into']} "
                          f"at ({dp['x']:.1f}, {dp['y']:.1f})")
     dr = as_list(r.get("drills"))

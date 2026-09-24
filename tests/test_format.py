@@ -57,3 +57,16 @@ def test_scan_renders_the_drill_footer():
 
 def test_scan_without_drills_has_no_footer():
     assert "mining drills" not in scan(scan_result())
+
+
+def test_scan_renders_the_inserter_footer_with_direction():
+    text = scan(scan_result(inserters=[{
+        "name": "burner-inserter", "position": {"x": 28.5, "y": -16.5}, "direction": 0,
+        "pickup": {"x": 28.5, "y": -17.5}, "pickup_from": "transport-belt",
+        "drop": {"x": 28.5, "y": -15.3}, "drop_into": "iron-chest",
+    }]))
+    lines = text.splitlines()
+    assert ("Your inserters (their direction is the side they PICK UP FROM — facing north they pick from "
+            "the north tile and drop south):") in lines
+    assert ("  burner-inserter at (28.5, -16.5) facing north: picks from transport-belt at (28.5, -17.5) "
+            "-> drops into iron-chest at (28.5, -15.3)") in lines

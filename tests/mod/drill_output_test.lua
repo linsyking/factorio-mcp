@@ -77,10 +77,18 @@ end
 -- nothing at its output, a healthy one feeding its belt
 put(27.65, -9.5, belt)   -- the dead drill's output tile
 put(28.65, -14.5, belt)  -- the healthy drill's output tile
+put(28.5, -17.5, belt)   -- the inserter's pickup tile (north of it)
+put(28.5, -15.3, chest)  -- the inserter's drop tile (south of it)
 scan_box = {
   mk_drill("electric-mining-drill", 29.5, -9.5, 12, 27.65, -9.5, S.no_minable_resources, 1.5),
   mk_drill("burner-mining-drill", 34, -20, 0, 33.5, -21.3, S.working, 1),
   mk_drill("electric-mining-drill", 30.5, -14.5, 12, 28.65, -14.5, S.working, 1.5),
+  { -- the audited inserter: direction 0 (north) PICKS FROM the north tile
+    valid = true, name = "burner-inserter", type = "inserter", force = my_force,
+    position = { x = 28.5, y = -16.5 }, direction = 0,
+    pickup_position = { x = 28.5, y = -17.5 }, drop_position = { x = 28.5, y = -15.3 },
+    bounding_box = { left_top = { x = 28, y = -17 }, right_bottom = { x = 29, y = -16 } },
+  },
 }
 
 local r = spatial.scan_area({ center = { x = 30, y = -13 }, radius = 15 })
@@ -109,6 +117,15 @@ end
 check(#missing == 0, "scan: every lowercase letter in the grid has a legend entry")
 check(r.legend.a == "electric-mining-drill" and r.legend.b == "burner-mining-drill",
   "scan: drill letters are assigned and explained")
+
+-- the inserter footer shows the direction WITH its ends: direction 0
+-- (north) picks from the north tile and drops south — the game truth the
+-- fleet keeps relearning (the gate and line-2 inserters came out reversed)
+check(#r.inserters == 1, "scan: the inserter in the area is listed")
+local ins = r.inserters[1]
+check(ins.direction == 0 and ins.pickup.y == -17.5 and ins.pickup_from == "transport-belt"
+  and ins.drop.y == -15.3 and ins.drop_into == "iron-chest",
+  "scan: an inserter's direction is listed beside its pickup and drop ends")
 
 -- -------------------------------------------------------- layout_context
 put(28.65, -14.5, chest) -- now a chest receives the healthy drill's output

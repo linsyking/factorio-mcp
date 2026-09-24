@@ -51,7 +51,7 @@ All results are filtered by fog of war (`scripts/vision.lua`):
 | `map_warnings` | Every own-force entity on charted ground with a problem status — the map screen's warning icons — grouped by problem with positions (nearest first, at most 60 per group, `more` counts the rest). Same problem classification as `analyze_factory` |
 | `alerts` | The game's alert panel, read through any connected player of the force (in 2.0 alerts live on players; the panel is force-wide information the human player watches). Grouped by alert type with each alert's target/position and the tick it was raised. Headless fallback: `battle_report` |
 | `battle_report {recent_s≤600}` | Battlefield snapshot: own-force entities below max health (worst first, at most 30), turrets with an empty ammo inventory, enemy clusters on charted ground (position-clustering; distance to the nearest own-force entity, closest threat first, at most 10), and recent combat events from the event log |
-| `scan_area {center?, radius≤120}` | ASCII grid; unknown tiles are `?`. Below the grid: every inserter with what it picks from / drops into, and every mining drill with the one tile it outputs onto and what stands there (drills with an empty output tile or no minable resources first) |
+| `scan_area {center?, radius≤120}` | ASCII grid; unknown tiles are `?`. Below the grid: every inserter with its direction and what it picks from / drops into, and every mining drill with the one tile it outputs onto and what stands there (drills with an empty output tile or no minable resources first) |
 | `can_place {item, position, direction} \| {placements≤24}` | Position must be known |
 | `find_buildable_area {width, height, near, max_distance}` | Known ground only |
 | `describe_prototype {names≤10}` | Static prototype data |
@@ -93,6 +93,8 @@ Task types:
 - combat and upkeep: `fight`, `defend_area`, `keep_fueled`
 
 Every task with a map target walks within reach first, and each movement goal is checked against the exploration rule.
+
+For inserters — `place` and `rotate` alike — the 16-way direction is the side the inserter PICKS UP FROM: facing north (0) it picks from the north tile and drops south (8 would pick from the south tile and drop north). This is game truth, read back from live entities; it is the opposite of the intuitive pointing-at-the-drop-target reading, and the tool schemas say so at every direction entry point.
 
 ### Craft reporting
 

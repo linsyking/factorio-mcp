@@ -285,7 +285,11 @@ function M.scan_area(params)
   end
 
   -- Inserters, with what is at each end: belt/inserter directions are the
-  -- most common building mistake, and a single letter can't show them.
+  -- most common building mistake, and a single letter can't show them. The
+  -- direction is listed with the ends because the mapping is learned the
+  -- hard way otherwise: an inserter's direction is the side it PICKS UP
+  -- FROM (facing north it picks from the north tile and drops south) —
+  -- verified against the game, but the opposite of what "facing" suggests.
   local inserters = {}
   local function thing_at(pos)
     for _, t in ipairs(surface.find_entities_filtered({ position = pos, limit = 4 })) do
@@ -301,6 +305,7 @@ function M.scan_area(params)
         inserters[#inserters + 1] = {
           position = { x = e.position.x, y = e.position.y },
           name = e.name,
+          direction = e.direction or 0,
           pickup = { x = e.pickup_position.x, y = e.pickup_position.y },
           pickup_from = thing_at(e.pickup_position),
           drop = { x = e.drop_position.x, y = e.drop_position.y },
