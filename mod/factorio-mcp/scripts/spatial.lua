@@ -311,6 +311,43 @@ function M.scan_area(params)
     end
   end
 
+  -- Mining drills, with the ONE tile each outputs onto (e.drop_position
+  -- points into it — the middle tile of the facing side, next to the
+  -- footprint; a 2x2 burner drill has no middle, the drop point picks the
+  -- tile). A belt placed anywhere else on the drill collects nothing, and a
+  -- drill on depleted ore looks fed to the last belt it filled — exactly the
+  -- states a planning agent must see, so those drills come first.
+  local status_names = {}
+  for name, value in pairs(defines.entity_status) do status_names[value] = name end
+  local drills, rest = {}, {}
+  for _, e in ipairs(entities) do
+    if e.valid and e.type == "mining-drill" and e.force == c.force and #drills + #rest < 40 then
+      local ok = pcall(function()
+        local status
+        local ok_s, st = pcall(function() return e.status end)
+        if ok_s and st ~= nil then status = status_names[st] or tostring(st) end
+        local d = {
+          position = { x = e.position.x, y = e.position.y },
+          name = e.name,
+          direction = e.direction or 0,
+          status = status,
+          output = {
+            x = math.floor(e.drop_position.x) + 0.5,
+            y = math.floor(e.drop_position.y) + 0.5,
+          },
+          output_into = thing_at(e.drop_position),
+        }
+        if d.output_into == "nothing" or status == "no_minable_resources" then
+          drills[#drills + 1] = d
+        else
+          rest[#rest + 1] = d
+        end
+      end)
+      if not ok then end
+    end
+  end
+  for i = 1, #rest do drills[#drills + 1] = rest[i] end
+
   return {
     origin = { x = ox, y = oy },
     width = size,
@@ -319,6 +356,7 @@ function M.scan_area(params)
     grid = grid,
     legend = legend,
     inserters = inserters,
+    drills = drills,
     note = "Your force's buildings cover their whole footprint; other entities mark their center tile."
       .. " Letters stay the same across scans and for every agent of your force.",
   }
@@ -486,15 +524,30 @@ function M.map_overview(params)
   }
 end
 
+-- the first non-character/resource/item entity standing at pos, and its
+-- type; "nothing" on empty ground, "unexplored" on fog of war
+local function what_at(surface, force, pos)
+  if not vision.is_known(surface, force, pos) then return "unexplored" end
+  for _, t in ipairs(surface.find_entities_filtered({ position = pos, limit = 6 })) do
+    if t.valid and t.type ~= "character" and t.type ~= "resource" and t.type ~= "item-entity" then
+      return t.name, t.type
+    end
+  end
+  return "nothing"
+end
+
 -- layout_context {area = {x1, y1, x2, y2}, points = {{x, y}, ...}}: what a
 -- build check needs to know about the ground a plan will join: belts in the
--- area (with direction) and the entity standing at each point. Known ground
--- only; points on unexplored ground report "unexplored".
+-- area (with direction), the mining drills (each with the one tile it
+-- outputs onto and what stands there) and the entity standing at each
+-- point. Known ground only; points on unexplored ground report
+-- "unexplored".
 function M.layout_context(params)
   local c = companion.require_companion()
   local surface = c.surface
   local a = params.area
   local belts = {}
+  local drills = {}
   if type(a) == "table" and #a == 4 then
     local x1, y1 = math.min(a[1], a[3]), math.min(a[2], a[4])
     local x2, y2 = math.max(a[1], a[3]), math.max(a[2], a[4])
@@ -509,25 +562,40 @@ function M.layout_context(params)
       belts[#belts + 1] = b
       if #belts >= 2000 then break end
     end
+    -- Mining drills: a drill outputs onto ONE tile (its drop_position), so a
+    -- build check needs the drill, that tile and what receives there.
+    local status_names = {}
+    for name, value in pairs(defines.entity_status) do status_names[value] = name end
+    local found_drills = vision.filter_perceivable(surface.find_entities_filtered({
+      area = { { x1, y1 }, { x2, y2 } }, type = "mining-drill",
+    }), surface, c.force)
+    for _, e in ipairs(found_drills) do
+      local ok = pcall(function()
+        local status
+        local ok_s, st = pcall(function() return e.status end)
+        if ok_s and st ~= nil then status = status_names[st] or tostring(st) end
+        local into, into_type = what_at(surface, c.force, e.drop_position)
+        drills[#drills + 1] = {
+          x = e.position.x, y = e.position.y,
+          name = e.name,
+          direction = e.direction or 0,
+          drop = { x = e.drop_position.x, y = e.drop_position.y },
+          drop_into = into,
+          drop_into_type = into_type,
+          status = status,
+        }
+      end)
+      if not ok then end
+      if #drills >= 400 then break end
+    end
   end
   local at = {}
   for i, pt in ipairs(params.points or {}) do
     if i > 400 then break end
     local pos = { x = tonumber(pt.x) or tonumber(pt[1]) or 0, y = tonumber(pt.y) or tonumber(pt[2]) or 0 }
-    local name = "nothing"
-    if not vision.is_known(surface, c.force, pos) then
-      name = "unexplored"
-    else
-      for _, t in ipairs(surface.find_entities_filtered({ position = pos, limit = 6 })) do
-        if t.valid and t.type ~= "character" and t.type ~= "resource" and t.type ~= "item-entity" then
-          name = t.name
-          break
-        end
-      end
-    end
-    at[i] = name
+    at[i] = what_at(surface, c.force, pos)
   end
-  return { belts = belts, at = at }
+  return { belts = belts, drills = drills, at = at }
 end
 
 function M.can_place(params)

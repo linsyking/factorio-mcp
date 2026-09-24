@@ -1,10 +1,13 @@
-"""Build checks: catch the two most common layout mistakes before the character builds.
+"""Build checks: catch the three most common layout mistakes before the character builds.
 
 Agents in the acceptance tests (research/factorio-agent/12, 13) repeatedly
 - turned a belt corner the wrong way ("north" is smaller y), so the line
   stopped at a dead end next to the belt that should have continued it;
 - placed inserters facing the wrong way (an inserter's direction is the side it
-  picks up from), so they picked from the chest instead of the furnace.
+  picks up from), so they picked from the chest instead of the furnace;
+- belted a mining drill on a tile its output never touches: a drill drops its
+  ore on exactly ONE tile (the middle tile of its facing side, next to the
+  footprint), and the game places a belt beside it without complaint.
 
 check_plan() looks at a build_plan's steps together with what already stands
 on the ground (layout_context RPC) and returns human-readable warnings, plus
@@ -21,6 +24,23 @@ from typing import Any
 UNIT = {0: (0, -1), 4: (1, 0), 8: (0, 1), 12: (-1, 0)}
 NAME = {0: "north", 4: "east", 8: "south", 12: "west"}
 BELT_TYPES = {"transport-belt", "underground-belt", "splitter"}
+# what can stand on a drill's output tile and receive its ore
+DRILL_RECEIVERS = BELT_TYPES | {"container", "logistic-container", "furnace", "assembling-machine",
+                                "mining-drill", "loader", "loader-1x1"}
+# at-points report entity names, not types: known non-receivers by name;
+# anything unrecognized counts as a receiver so unknown machines never
+# trigger false warnings
+_NOT_RECEIVERS = ("inserter", "pipe", "pump", "pole", "wall", "turret", "radar", "lab", "roboport")
+
+
+def drill_receives(name: str | None, kind: str | None = None) -> bool:
+    """Whether the thing standing at a drill's output tile can receive its ore."""
+    if kind:
+        return kind in DRILL_RECEIVERS
+    if not name or name in ("nothing", "unexplored"):
+        return False
+    n = name.lower()
+    return not any(part in n for part in _NOT_RECEIVERS)
 
 
 def snap(v: float, size: int) -> float:
@@ -86,7 +106,9 @@ def planned(steps: list[dict[str, Any]], protos: dict[str, Any]) -> list[Placed]
 
 
 def context_request(plan: list[Placed]) -> tuple[list[float], list[dict[str, float]]]:
-    """The area and points check_plan needs from the game (layout_context)."""
+    """The area and points check_plan needs from the game (layout_context).
+    Inserter points come first, drill output points after — check_plan reads
+    the at-answers in exactly this order."""
     xs = [p.x for p in plan] or [0.0]
     ys = [p.y for p in plan] or [0.0]
     area = [min(xs) - 3, min(ys) - 3, max(xs) + 3, max(ys) + 3]
@@ -98,6 +120,12 @@ def context_request(plan: list[Placed]) -> tuple[list[float], list[dict[str, flo
                 if off:
                     ox, oy = rotate((off["x"], off["y"]), p.direction)
                     points.append({"x": p.x + ox, "y": p.y + oy})
+    for p in plan:
+        if p.kind == "mining-drill":
+            off = p.entity.get("drop_offset")
+            if off:
+                ox, oy = rotate((off["x"], off["y"]), p.direction)
+                points.append({"x": p.x + ox, "y": p.y + oy})
     return area, points
 
 
@@ -175,4 +203,60 @@ def check_plan(plan: list[Placed], ctx: dict[str, Any]) -> tuple[list[str], list
                             f"wrong way (direction = the side it picks up from)")
         elif dst in ("nothing", "unexplored"):
             warnings.append(f"{p.item} at ({p.x}, {p.y}) drops onto an empty tile (picks from {src})")
+
+    # Mining drills: each drops its ore on ONE tile — the middle tile of its
+    # facing side, next to the footprint. The game places a belt beside a
+    # drill without complaint, and it collects nothing.
+    for p in plan:
+        if p.kind != "mining-drill":
+            continue
+        off = p.entity.get("drop_offset")
+        if not off:
+            continue
+        ox, oy = rotate((off["x"], off["y"]), p.direction)
+        px, py = p.x + ox, p.y + oy
+        tx, ty = math.floor(px) + 0.5, math.floor(py) + 0.5  # the tile a receiver must stand on
+        q = next((q for q in plan if q is not p and q.covers(px, py)), None)
+        if q is not None:
+            if q.kind not in DRILL_RECEIVERS:
+                warnings.append(f"{p.item} at ({p.x:g}, {p.y:g}) outputs onto ({tx:g}, {ty:g}), but this plan "
+                                f"places a {q.item} there: a drill can only load a belt, chest or machine on that "
+                                f"tile.")
+            continue
+        existing = next(names, "nothing")  # the drill points, after the inserter points
+        if existing == "nothing":
+            warnings.append(f"{p.item} at ({p.x:g}, {p.y:g}) facing {NAME.get(p.direction, p.direction)} outputs "
+                            f"onto ({tx:g}, {ty:g}), and neither this plan nor the ground puts anything there: its "
+                            f"ore has nowhere to go. A drill loads exactly that ONE tile — a belt beside the drill "
+                            f"collects nothing; put a belt, chest or furnace on it, or turn the drill so its facing "
+                            f"side points at a receiver.")
+        elif existing == "unexplored":
+            warnings.append(f"{p.item} at ({p.x:g}, {p.y:g}) outputs onto unexplored ground at ({tx:g}, {ty:g}) — "
+                            f"scan that tile to see whether anything receives the ore.")
+        elif not drill_receives(existing):
+            warnings.append(f"{p.item} at ({p.x:g}, {p.y:g}) outputs onto ({tx:g}, {ty:g}) where the {existing} "
+                            f"stands: a drill can only load a belt, chest or machine on that tile.")
+
+    # Existing drills near the plan, from layout_context.
+    for d in ctx.get("drills") or []:
+        if d.get("status") == "no_minable_resources":
+            continue  # dead drill: nothing comes out (map_warnings flags it)
+        drop = d.get("drop") or {}
+        px, py = float(drop.get("x") or 0), float(drop.get("y") or 0)
+        tx, ty = math.floor(px) + 0.5, math.floor(py) + 0.5
+        here = f"the {d['name']} at ({d['x']:g}, {d['y']:g}) facing {NAME.get(d.get('direction') or 0, '?')}"
+        covered = next((q for q in plan if q.covers(px, py)), None)
+        if covered is not None:
+            if covered.kind not in DRILL_RECEIVERS:
+                warnings.append(f"{here} outputs onto ({tx:g}, {ty:g}), but this plan places a {covered.item} "
+                                f"there: a drill can only load a belt, chest or machine on that tile.")
+            continue  # the plan already puts something on the output tile
+        into, itype = d.get("drop_into"), d.get("drop_into_type")
+        if into == "unexplored":
+            continue
+        if not drill_receives(into, itype):
+            why = ("nothing stands there — its ore has nowhere to go" if into in (None, "nothing")
+                   else f"the {into} there cannot receive it")
+            warnings.append(f"{here} outputs onto ({tx:g}, {ty:g}), but {why}. A drill loads exactly one tile "
+                            f"(the middle tile of its facing side); put a belt, chest or furnace there.")
     return warnings, lines

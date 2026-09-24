@@ -10,7 +10,8 @@ local function check(cond, what)
 end
 
 local S = { normal = 1, working = 2, no_power = 3, not_plugged_in_electric_network = 4,
-  no_fuel = 5, full_output = 6, waiting_for_source_items = 7, no_recipe = 8 }
+  no_fuel = 5, full_output = 6, waiting_for_source_items = 7, no_recipe = 8,
+  no_minable_resources = 9 }
 local status_names = {}
 for n, v in pairs(S) do status_names[v] = n end
 _G.defines = { entity_status = S }
@@ -66,6 +67,7 @@ found = {
   ent("assembling-machine-1", nil, S.no_power, 2, 0),
   ent("burner-inserter", "inserter", S.not_plugged_in_electric_network, 5, 5),
   ent("burner-mining-drill", "mining-drill", S.no_fuel, -3, 0),
+  ent("electric-mining-drill", "mining-drill", S.no_minable_resources, -2, -2), -- dead: ore gone
   ent("transport-belt", "transport-belt", S.normal, 1, 1),          -- healthy: skipped
   ent("inserter", "inserter", S.waiting_for_source_items, 1, 1),     -- idle, no warning icon: skipped
   ent("agent-7", "character", S.no_power, 0, 0),                     -- characters: skipped
@@ -73,10 +75,18 @@ found = {
   ent("steel-furnace", nil, S.full_output, -1, 4),
 }
 local r = warnings.map_warnings({})
-check(r.with_problems == 5 and r.entities_checked == 7,
-  "map_warnings: 5 problem machines of 7 checked; healthy, characters and fog excluded")
-check(#r.groups == 5 and r.groups[5].idle == true and r.groups[5].problem == "waiting_for_source_items",
+check(r.with_problems == 6 and r.entities_checked == 8,
+  "map_warnings: 6 problem machines of 8 checked; healthy, characters and fog excluded")
+check(#r.groups == 6 and r.groups[6].idle == true and r.groups[6].problem == "waiting_for_source_items",
   "map_warnings: idle inserters get their own trailing section, never a problem group")
+do
+  local dead
+  for _, g in ipairs(r.groups) do
+    if g.problem == "no_minable_resources" then dead = g end
+  end
+  check(dead and dead.count == 1 and dead.entities[1].x == -2 and dead.entities[1].y == -2,
+    "map_warnings: a drill on depleted ore is a warning group — the map screen's decomposition candidate")
+end
 check(r.groups[1].problem == "no_power" and r.groups[1].count == 2 and r.groups[1].idle == nil,
   "map_warnings: problem groups sorted by count, no_power first")
 check(r.groups[1].by_name["assembling-machine-1"] == 2 and #r.groups[1].entities == 2,

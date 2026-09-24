@@ -51,7 +51,7 @@ All results are filtered by fog of war (`scripts/vision.lua`):
 | `map_warnings` | Every own-force entity on charted ground with a problem status — the map screen's warning icons — grouped by problem with positions (nearest first, at most 60 per group, `more` counts the rest). Same problem classification as `analyze_factory` |
 | `alerts` | The game's alert panel, read through any connected player of the force (in 2.0 alerts live on players; the panel is force-wide information the human player watches). Grouped by alert type with each alert's target/position and the tick it was raised. Headless fallback: `battle_report` |
 | `battle_report {recent_s≤600}` | Battlefield snapshot: own-force entities below max health (worst first, at most 30), turrets with an empty ammo inventory, enemy clusters on charted ground (position-clustering; distance to the nearest own-force entity, closest threat first, at most 10), and recent combat events from the event log |
-| `scan_area {center?, radius≤30}` | ASCII grid; unknown tiles are `?` |
+| `scan_area {center?, radius≤120}` | ASCII grid; unknown tiles are `?`. Below the grid: every inserter with what it picks from / drops into, and every mining drill with the one tile it outputs onto and what stands there (drills with an empty output tile or no minable resources first) |
 | `can_place {item, position, direction} \| {placements≤24}` | Position must be known |
 | `find_buildable_area {width, height, near, max_distance}` | Known ground only |
 | `describe_prototype {names≤10}` | Static prototype data |
@@ -119,12 +119,13 @@ Every task with a map target walks within reach first, and each movement goal is
 
 ### Build checks
 
-`layout_context {area: [x1, y1, x2, y2], points: [{x, y}, …]}` returns `{belts: [{x, y, direction, type, name, underground_type?}], at: [name | "nothing" | "unexplored"]}`. It's read-only and uses known ground only (at most 200×200 tiles, 400 points).
+`layout_context {area: [x1, y1, x2, y2], points: [{x, y}, …]}` returns `{belts: [{x, y, direction, type, name, underground_type?}], drills: [{x, y, name, direction, drop: {x, y}, drop_into, drop_into_type, status}], at: [name | "nothing" | "unexplored"]}`. It's read-only and uses known ground only (at most 200×200 tiles, 400 points).
 
 The server combines it with the plan's own entities (`checks.py`):
 - belt dead ends next to an input-less line;
 - belts facing each other;
-- each inserter's pickup and drop entity, with a warning when it picks from nothing or from a chest placed in the same plan.
+- each inserter's pickup and drop entity, with a warning when it picks from nothing or from a chest placed in the same plan;
+- each drill's one output tile (the middle tile of its facing side, next to the footprint — the prototype's `drop_offset` rotated by direction): a warning when neither the plan nor the ground puts a receiver there, for drills the plan places and for existing drills near it. Dead drills (`no_minable_resources`) are skipped: nothing comes out of them.
 
 ### Idempotent enqueue
 

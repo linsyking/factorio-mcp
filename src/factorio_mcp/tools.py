@@ -214,7 +214,7 @@ def register(app: MCPServer, game: Game) -> None:
 
     async def layout_check(steps: list[dict[str, Any]], protos: dict[str, Any] | None = None
                            ) -> tuple[list[str], list[str]]:
-        """Belt-flow and inserter-end checks for planned placements (see checks.py)."""
+        """Belt-flow, inserter-end and drill-output checks for planned placements (see checks.py)."""
         try:
             if protos is None:
                 names = sorted({st["item"].split("@")[0] for st in steps})
@@ -308,7 +308,10 @@ def register(app: MCPServer, game: Game) -> None:
 
     @tool("ASCII tile grid of a square area (radius up to 120): one character per tile, or per scale x scale tiles "
           "for large scans (automatic above radius 40), rows north to south. Unexplored tiles are '?'. "
-          "The legend explains every symbol (uppercase = resources, lowercase = your force's buildings, @ = you).")
+          "The legend explains every symbol (uppercase = resources, lowercase = your force's buildings, @ = you). "
+          "Below the grid: your inserters (what each picks from / drops into) and your mining drills (the ONE tile "
+          "each outputs onto — the middle tile of its facing side — and what stands there; drills with an empty "
+          "output tile or no minable resources come first).")
     async def scan_area(
         x: float | None = None,
         y: float | None = None,
@@ -833,8 +836,10 @@ def register(app: MCPServer, game: Game) -> None:
           "inventory, normal placement rules), each optionally setting a recipe and inserting items. Failed steps are "
           "reported and skipped unless stop_on_error. auto_craft hand-crafts missing placeable items first. "
           "Inserter steps can give drop_to / pickup_from instead of a direction. Belt flow (dead-end corners, belts "
-          "facing each other) and what each inserter picks from / drops into are checked and reported as warnings. "
-          "dry_run=true only checks the plan (items, recipes, placement, overlaps, layout) without building.")
+          "facing each other), what each inserter picks from / drops into, and every mining drill's one output tile "
+          "(warning when neither the plan nor the ground puts a receiver on it) are checked and reported as "
+          "warnings. dry_run=true only checks the plan (items, recipes, placement, overlaps, layout) without "
+          "building.")
     async def build_plan(
         steps: Annotated[list[BuildStep], Field(min_length=1, max_length=100)],
         stop_on_error: bool = False,

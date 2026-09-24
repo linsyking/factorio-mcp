@@ -198,7 +198,7 @@ def scan(r: dict[str, Any]) -> str:
         *[f"{str(y).rjust(width)} {row}" for y, row in zip(ys, rows)],
         "```",
         "Legend:",
-        *[f"{k_} = {v}" for k_, v in (r.get("legend") or {}).items()],
+        *legend_lines(r.get("legend") or {}),
     ]
     ins = as_list(r.get("inserters"))
     if ins:
@@ -208,9 +208,42 @@ def scan(r: dict[str, Any]) -> str:
             lines.append(f"  {i['name']} at ({i['position']['x']:g}, {i['position']['y']:g}): picks from "
                          f"{i['pickup_from']} at ({pk['x']:.1f}, {pk['y']:.1f}) -> drops into {i['drop_into']} "
                          f"at ({dp['x']:.1f}, {dp['y']:.1f})")
+    dr = as_list(r.get("drills"))
+    if dr:
+        lines.append("Your mining drills (each outputs onto ONE tile — the middle tile of its facing side; a belt "
+                     "anywhere else collects nothing):")
+        for d in dr:
+            out = d["output"]
+            into = d.get("output_into")
+            if into == "nothing":
+                dest = f"NOTHING at ({out['x']:g}, {out['y']:g}) — its ore has nowhere to go"
+            else:
+                dest = f"{into} at ({out['x']:g}, {out['y']:g})"
+            facing = f" facing {dir_name(d['direction'])}" if d.get("direction") is not None else ""
+            status = d.get("status") or ""
+            if status == "no_minable_resources":
+                state = " — DEAD (no minable resources: the ore under it is gone)"
+            elif status and status not in ("working", "normal"):
+                state = f" ({status.replace('_', ' ')})"
+            else:
+                state = ""
+            lines.append(f"  {d['name']} at ({d['position']['x']:g}, {d['position']['y']:g}){facing}: outputs onto "
+                         f"{dest}{state}")
     if r.get("note"):
         lines.append(r["note"])
     return "\n".join(lines)
+
+
+def legend_lines(legend: dict[str, Any]) -> list[str]:
+    """Legend entries as lines: symbols first in the mod's fixed order, then
+    every letter alphabetically (uppercase resources, then lowercase
+    buildings, then *) — a letter is findable at a glance even when the base
+    fills all 26."""
+    def letter_key(c: str) -> tuple[int, str]:
+        return (2 if c == "*" else int(c.islower()), c)
+    symbols = [c for c in legend if not (c.isalpha() or c == "*")]
+    letters = sorted((c for c in legend if c.isalpha() or c == "*"), key=letter_key)
+    return [f"{c} = {legend[c]}" for c in symbols + letters]
 
 
 def _offset(o: dict[str, Any]) -> str:
