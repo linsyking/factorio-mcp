@@ -146,7 +146,12 @@ Any player can type these in chat. They're a viewing aid for people; agents neve
 | `/follow-cams` | One camera window per agent and per other connected player, laid out side by side. Windows come and go with the characters; run it again to close all of them. |
 | `/unfollow` | Stop all of these. |
 
-**Windows.** Drag a window by its title bar. The title-bar buttons are `-` / `+` for window size (320×200 up to 1280×800, default 640×400), `z-` / `z+` for camera zoom, and `x` to close that window. Each window remembers its size and zoom. Factorio doesn't let mods resize windows by dragging their edges.
+**Windows.**
+- `/follow-cams` windows are tiled to fit your screen: 3 per row at 1920×1080 (600×375 cameras), 4 on a 2560-wide screen.
+- When more windows come than fit, all of them shrink together (7 → 4×2 at 446×278 on 1080p), so none opens off-screen. Below the minimum size (240×150), extras stack with an offset on screen.
+- Tiling runs when a window opens or closes, on the `#` button, and when the resolution or UI scale changes.
+- Other title-bar buttons: `-` / `+` for size (×1.25 steps), `z-` / `z+` for zoom, and `x` to close. Drag a window by its title bar; drags and resizes last until the next tiling.
+- Factorio doesn't let mods resize windows by dragging their edges.
 
 **Status lines.** Every agent window shows a status line under its camera (nothing is drawn above the character):
 - the agent's own text, set with the `set_status` tool;

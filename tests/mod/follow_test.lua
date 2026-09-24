@@ -89,7 +89,7 @@ check(storage.followers[1] == nil, "follow: leaving remote view stops following"
 follow.start(player, "agent", "cam")
 local single = screen["factorio_mcp_cam_single"]
 check(single and single.cam.entity == new_body, "follow-cam: camera window follows the agent")
-check(single.cam.style.width == 640 and single.cam.style.height == 400, "follow-cam: default camera size 640x400")
+check(single.cam.style.width == 600 and single.cam.style.height == 375, "follow-cam: default camera size 600x375")
 follow.stop(player)
 check(#windows() == 0 and storage.followers[1] == nil, "unfollow: closes the window")
 
@@ -116,7 +116,7 @@ local function click(win, action)
   follow.on_gui_click({ player_index = 1, element = win.bar["factorio_mcp_cam_btn_" .. action] })
 end
 click(a, "larger")
-check(a.cam.style.width == 800 and a.cam.style.height == 500, "buttons: + makes the window larger")
+check(a.cam.style.width == 750 and a.cam.style.height == 468, "buttons: + makes the window larger")
 click(a, "smaller") click(a, "smaller")
 check(a.cam.style.width == 480, "buttons: - makes it smaller")
 local z = a.cam.zoom
@@ -145,8 +145,44 @@ check(screen["factorio_mcp_cam_a_beta"] ~= nil and not overlap,
 follow.start(player, nil, "cams")
 check(#windows() == 0 and storage.followers[1] == nil, "follow-cams: running it again closes all")
 follow.start(player, nil, "cams")
-check(screen["factorio_mcp_cam_a_agent"].cam.style.width == 480, "follow-cams: a reopened window keeps its size")
+check(screen["factorio_mcp_cam_a_agent"].cam.style.width == 600, "follow-cams: reopened windows are tiled again")
 follow.stop(player)
+
+-- tiling: 3 per row at 1920x1080; more windows than fit all shrink, all stay on screen
+local function open_all(n)
+  for k in pairs(bodies) do bodies[k] = nil end
+  for i = 1, n do
+    bodies[string.format("a%02d", i)] = { valid = true, unit_number = 100 + i, position = { x = i, y = 0 }, surface = { index = 1 } }
+  end
+  game.connected_players = { player } -- only agents
+  follow.start(player, nil, "cams")
+  local wins = windows()
+  follow.stop(player)
+  return wins
+end
+local function on_screen(wins)
+  for _, w in ipairs(wins) do
+    local x, y = w.location[1], w.location[2]
+    local cw, ch = w.cam.style.width + 24, w.cam.style.height + 100
+    if x < 0 or y < 0 or x + cw > 1920 or y + ch > 1080 then return false end
+  end
+  return true
+end
+local six = open_all(6)
+check(#six == 6 and six[1].location[2] == six[3].location[2] and six[4].location[2] > six[1].location[2]
+  and six[1].cam.style.width == 600, "tile: 6 windows are 3 per row, 2 rows, at 600x375")
+check(on_screen(six), "tile: 6 windows are all on screen")
+local seven = open_all(7)
+local same = true
+for _, w in ipairs(seven) do if w.cam.style.width ~= seven[1].cam.style.width then same = false end end
+check(#seven == 7 and seven[1].cam.style.width < 600 and same and on_screen(seven),
+  "tile: a 7th window makes all of them shrink to fit — none off screen")
+local many = open_all(30)
+check(#many == 30 and on_screen(many), "tile: even 30 windows stay on screen (extras stacked at the minimum size)")
+player.display_resolution = { width = 2560, height = 1440 }
+local big = open_all(6)
+check(big[1].cam.style.width == 600 and big[1].location[2] == big[4].location[2], "tile: a wider screen fits 4 per row")
+player.display_resolution = { width = 1920, height = 1080 }
 
 -- status line
 ctx = "agent"

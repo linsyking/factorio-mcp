@@ -112,6 +112,8 @@ end)
 script.on_event(defines.events.on_tick, tasks.on_tick)
 script.on_nth_tick(follow.CHECK_TICKS, follow.on_check)
 script.on_event(defines.events.on_gui_click, follow.on_gui_click)
+script.on_event({ defines.events.on_player_display_resolution_changed, defines.events.on_player_display_scale_changed },
+  follow.on_display_changed)
 script.on_event(defines.events.on_runtime_mod_setting_changed, function(e)
   if e.setting == "factorio-mcp-pathfinder-budget" then walk.apply_pathfinder_budget() end
 end)
