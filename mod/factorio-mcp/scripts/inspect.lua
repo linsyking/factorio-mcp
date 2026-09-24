@@ -4,6 +4,7 @@ local companion = require("scripts.companion")
 local vision = require("scripts.vision")
 local approach = require("scripts.actions.approach")
 local provenance = require("scripts.provenance")
+local belts = require("scripts.belts")
 
 local M = {}
 
@@ -312,7 +313,7 @@ local function inspect_one(params)
       for _, i in ipairs(bn.inputs or {}) do ins[#ins + 1] = xy(i) end
       out.belt_fed_by = ins
     end)
-    if e.type == "underground-belt" then out.underground = require("scripts.belts").underground_note(e) end
+    if e.type == "underground-belt" then out.underground = belts.underground_note(e) end
   end
 
   -- who last changed this entity, when a job of this mod did (the fleet is

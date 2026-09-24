@@ -11,6 +11,7 @@ local placement = require("scripts.placement")
 local items = require("scripts.items")
 local approach = require("scripts.actions.approach")
 local craft = require("scripts.actions.craft")
+local belts = require("scripts.belts")
 local provenance = require("scripts.provenance")
 
 local M = {}
@@ -247,7 +248,7 @@ local function unpaired_note(task)
   for _, e in ipairs(task._undergrounds or {}) do
     if e.valid and not e.neighbours and #notes < 3 then
       notes[#notes + 1] = string.format("the underground at (%.1f, %.1f) is an %s", e.position.x, e.position.y,
-        require("scripts.belts").underground_note(e))
+        belts.underground_note(e))
     end
   end
   return #notes > 0 and (" — warning: " .. table.concat(notes, "; ")) or ""

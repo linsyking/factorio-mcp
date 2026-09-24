@@ -5,6 +5,7 @@ local placement = require("scripts.placement")
 local items = require("scripts.items")
 local approach = require("scripts.actions.approach")
 local build_plan = require("scripts.actions.build_plan")
+local belts = require("scripts.belts")
 local provenance = require("scripts.provenance")
 
 local M = {}
@@ -143,7 +144,7 @@ function M.place.tick(task)
   end
   if built.valid and built.type == "underground-belt" then
     -- say whether it paired: an unpaired entrance swallows nothing and passes nothing
-    local note, paired = require("scripts.belts").underground_note(built)
+    local note, paired = belts.underground_note(built)
     recipe_note = recipe_note .. " — underground " .. note
       .. ((not paired and built.belt_to_ground_type == "input") and " (normal until you place its exit)" or "")
   end

@@ -80,6 +80,7 @@ All results are filtered by fog of war (`scripts/vision.lua`):
 Each character has one lane, a FIFO queue plus the active job, and lanes tick in parallel.
 - **`replace`** cancels the lane first.
 - **`chain`:** when a step of a chain fails, the rest of the chain is cancelled.
+- **Restarts:** a server restart rolls the game back to its last autosave — jobs queued after that save are gone, and a chain whose jobs vanished that way never receives its failure (it was annihilated, not failed). The MCP client detects the rollback at the next bind (the server tick is below the last one the character saw), cancels whatever the rolled-back save resurrected in the lane, starts a fresh chain, and tells the agent to resubmit.
 - **`quiet`** suppresses the `job_done` event.
 
 Task types:

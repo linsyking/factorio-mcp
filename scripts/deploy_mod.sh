@@ -37,6 +37,24 @@ ZIP="$(uv run -q factorio-mcp package-mod)"
 NAME="$(basename "$ZIP")"
 echo "packaged $NAME"
 
+# Publish BEFORE touching the server, and verify byte-identical: the download
+# page must never point at a zip the server isn't about to run, and a failed
+# deploy must never leave a stale published zip while the container holds
+# something else (the 0.2.16 incident: the hotfix reached the container by
+# docker cp, the crashed deploy never re-published, every client got the
+# broken zip).
+if [ -n "${PUBLISH_DIR:-}" ]; then
+  ssh -o BatchMode=yes "$TARGET" "mkdir -p '$PUBLISH_DIR' && cat > '$PUBLISH_DIR/$NAME'" < "$ZIP"
+  local_sha="$(sha256sum "$ZIP" | cut -d' ' -f1)"
+  remote_sha="$(ssh -o BatchMode=yes "$TARGET" "sha256sum '$PUBLISH_DIR/$NAME'" | cut -d' ' -f1)"
+  if [ "$local_sha" != "$remote_sha" ]; then
+    echo "publish verification failed: $PUBLISH_DIR/$NAME sha256 $remote_sha != $local_sha — server NOT restarted" >&2
+    exit 1
+  fi
+  echo "published $NAME (sha256 verified: ${local_sha:0:12}...)"
+  ssh -o BatchMode=yes "$TARGET" "python3 - '$PUBLISH_DIR' ${PUBLISH_SERVER_ADDRESS:+--server '$PUBLISH_SERVER_ADDRESS'}" < scripts/publish_page.py
+fi
+
 ssh -o BatchMode=yes "$TARGET" "cat > /tmp/$NAME" < "$ZIP"
 ssh -o BatchMode=yes "$TARGET" bash -s -- "$NAME" "$DIR" "$CONTAINER" <<'REMOTE'
 set -euo pipefail
@@ -58,11 +76,6 @@ cd "$DIR" && docker compose restart >/dev/null
 sleep 8
 docker logs --tail 60 "$CONTAINER" 2>&1 | grep -E "Loading mod factorio-mcp|Error|error|Hosting game" | tail -5
 REMOTE
-
-if [ -n "${PUBLISH_DIR:-}" ]; then
-  ssh -o BatchMode=yes "$TARGET" "mkdir -p '$PUBLISH_DIR' && cat > '$PUBLISH_DIR/$NAME'" < "$ZIP"
-  ssh -o BatchMode=yes "$TARGET" "python3 - '$PUBLISH_DIR' ${PUBLISH_SERVER_ADDRESS:+--server '$PUBLISH_SERVER_ADDRESS'}" < scripts/publish_page.py
-fi
 
 if [ -n "${SERVER_REPO:-}" ]; then
   ssh -o BatchMode=yes "$TARGET" "cd '$SERVER_REPO' && git pull --ff-only && echo \"server checkout: \$(git log --oneline -1)\""

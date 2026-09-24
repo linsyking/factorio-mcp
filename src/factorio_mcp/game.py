@@ -46,6 +46,7 @@ class Game:
         self._bound: dict[str, Any] | None = None
         self._lock = asyncio.Lock()
         self._queue: str | None = None
+        self._notice: str | None = None
         self._bridge.rebind = self._rebind
 
     # The job queue: every job this character is given joins one chain, so a
@@ -60,20 +61,20 @@ class Game:
     def _queue_key(self) -> str:
         return f"{self.cfg.host}:{self.cfg.port}/{self.cfg.character}"
 
-    @property
-    def queue(self) -> str:
-        if self._queue is None:
-            try:
-                self._queue = json.loads(self._queue_file().read_text()).get(self._queue_key())
-            except (OSError, ValueError, AttributeError):
-                self._queue = None
-            if not self._queue:
-                self.new_queue()
-        assert self._queue is not None
-        return self._queue
+    def _read_queue_state(self) -> dict[str, Any]:
+        """The shared state entry: {"chain": id, "last_tick": n}. The old
+        format was a bare chain string — migrate it with last_tick 0."""
+        try:
+            v = json.loads(self._queue_file().read_text()).get(self._queue_key())
+        except (OSError, ValueError, AttributeError):
+            v = None
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str):
+            return {"chain": v, "last_tick": 0}
+        return {}
 
-    def new_queue(self) -> None:
-        self._queue = f"{self.cfg.character}:{uuid.uuid4().hex[:12]}"
+    def _write_queue_state(self, state: dict[str, Any]) -> None:
         path = self._queue_file()
         try:
             try:
@@ -82,13 +83,75 @@ class Game:
                     data = {}
             except (OSError, ValueError):
                 data = {}
-            data[self._queue_key()] = self._queue
+            data[self._queue_key()] = state
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(f".{os.getpid()}.tmp")
             tmp.write_text(json.dumps(data))
             os.replace(tmp, path)
         except OSError:
             pass  # in-memory only
+
+    @property
+    def queue(self) -> str:
+        if self._queue is None:
+            self._queue = self._read_queue_state().get("chain")
+            if not self._queue:
+                self.new_queue()
+        assert self._queue is not None
+        return self._queue
+
+    def new_queue(self, baseline_tick: int | None = None) -> None:
+        """Starts a fresh chain for this character. baseline_tick re-anchors
+        the restart detector's timeline (used when a rollback was detected:
+        the server's tick legitimately went backward)."""
+        state = self._read_queue_state()
+        self._queue = f"{self.cfg.character}:{uuid.uuid4().hex[:12]}"
+        state["chain"] = self._queue
+        if baseline_tick is not None:
+            state["last_tick"] = baseline_tick
+        self._write_queue_state(state)
+
+    def _note_tick(self, tick: int) -> None:
+        """Remembers the highest server tick this character has seen, so a
+        later bind can detect a rollback (a restart onto an older autosave)."""
+        state = self._read_queue_state()
+        if tick > int(state.get("last_tick") or 0):
+            state["last_tick"] = tick
+            self._write_queue_state(state)
+
+    async def _check_restart(self, tick: int) -> None:
+        """After binding: a server tick BELOW the last one this character saw
+        means the game rolled back to an older save. Every job queued since
+        that save is gone server-side, so the chain is dead although it never
+        "failed" — no failure event will ever acknowledge it (the wedge that
+        stalled coal's lane through the 0.2.16 deploy). Cancel whatever the
+        rolled-back save resurrected in the lane, start a fresh chain, and
+        tell the agent on the next tool result."""
+        state = self._read_queue_state()
+        last = int(state.get("last_tick") or 0)
+        if tick <= 0:
+            return
+        if last and tick < last:
+            try:
+                await self._bridge.call("cancel", {"all": True})
+                cancelled = True
+            except ModError:
+                cancelled = False
+            self.new_queue(tick)
+            self._notice = (
+                f"[factorio-mcp] the server restarted and rolled back (tick {last} -> {tick}): the jobs queued in "
+                f"your old chain are gone{' and the stale lane was cancelled' if cancelled else ''}. A fresh queue "
+                f"was started — resubmit what still matters."
+            )
+            log.info("restart rollback detected for %s (tick %d -> %d); fresh queue started",
+                     self.cfg.character, last, tick)
+        else:
+            self._note_tick(tick)
+
+    def take_notice(self) -> str:
+        """One-shot: the restart notice for the next tool result, if any."""
+        notice, self._notice = self._notice, None
+        return notice or ""
 
     @property
     def character(self) -> str:
@@ -112,6 +175,7 @@ class Game:
                         f"'{self.cfg.character}': {e}"
                     ) from e
                 body = self._bound["body"]
+                await self._check_restart(int(self._bound["ping"].get("tick") or 0))
                 log.info(
                     "bound character %s at (%.1f, %.1f)%s",
                     self.cfg.character,
@@ -149,7 +213,8 @@ class Game:
             if self._bound is None:
                 continue
             try:
-                await self._bridge.call("heartbeat")
+                reply = await self._bridge.call("heartbeat")
+                self._note_tick(int(reply.get("tick") or 0))
             except ModError as e:
                 print(f"[factorio-mcp] heartbeat failed: {e}", file=sys.stderr)
                 if "does not hold character" in str(e):

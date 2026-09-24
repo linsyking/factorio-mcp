@@ -148,11 +148,16 @@ def register(app: MCPServer, game: Game) -> None:
     def with_inbox(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
+            prefix = game.take_notice()  # e.g. "the server rolled back; resubmit"
             try:
                 out = await fn(*args, **kwargs)
             except ToolError as e:
-                raise ToolError(str(e) + await inbox()) from e
-            return out + await inbox() if isinstance(out, str) else out
+                msg = str(e) + await inbox()
+                raise ToolError((prefix + msg) if prefix else msg) from e
+            if not isinstance(out, str):
+                return out
+            suffix = await inbox()
+            return (prefix + out + suffix) if prefix else (out + suffix)
 
         return wrapper
 
