@@ -36,6 +36,44 @@ function M.character_inside(c, area)
   return p.x + r > area[1][1] and p.x - r < area[2][1] and p.y + r > area[1][2] and p.y - r < area[2][2]
 end
 
+-- Our own building standing in the footprint (placing there would
+-- fast-replace it: the engine destroys it, contents and all). Returns the
+-- entity and how many items it holds, or nil.
+local IGNORE = { character = true, ["entity-ghost"] = true, ["tile-ghost"] = true, ["item-entity"] = true,
+  ["item-request-proxy"] = true, resource = true, corpse = true, ["character-corpse"] = true }
+function M.occupant(c, entity_name, pos, direction)
+  local proto = prototypes.entity[entity_name]
+  if not proto then return nil end
+  local a = M.footprint(proto, pos, direction)
+  local area = { { a[1][1] + 0.05, a[1][2] + 0.05 }, { a[2][1] - 0.05, a[2][2] - 0.05 } }
+  for _, e in ipairs(c.surface.find_entities_filtered({ area = area, force = c.force })) do
+    if e.valid and not IGNORE[e.type] then
+      local n = 0
+      pcall(function()
+        for i = 1, e.get_max_inventory_index() do
+          local inv = e.get_inventory(i)
+          if inv then n = n + inv.get_item_count() end
+        end
+      end)
+      return e, n
+    end
+  end
+  return nil
+end
+
+-- Directions: most buildings face only north/east/south/west; a diagonal
+-- value (e.g. 6) used to snap silently to a quarter turn.
+function M.check_direction(entity_name, direction)
+  local d = math.floor(tonumber(direction) or 0) % 16
+  if d % 4 == 0 then return nil end
+  local proto = prototypes.entity[entity_name]
+  local flags = proto and proto.flags or {}
+  local eight = flags["building-direction-8-way"] or flags["building-direction-16-way"]
+  if eight and (d % 2 == 0 or flags["building-direction-16-way"]) then return nil end
+  return string.format("direction %d is diagonal, but a %s can only face 0 (north), 4 (east), 8 (south) or 12 (west)",
+    d, entity_name)
+end
+
 local function is_water(surface, x, y)
   local ok, res = pcall(function()
     return surface.get_tile(math.floor(x), math.floor(y)).collides_with("water_tile")

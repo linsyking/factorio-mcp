@@ -11,6 +11,7 @@ end
 
 _G.defines = { direction = { north = 0, northeast = 2, east = 4, southeast = 6, south = 8, southwest = 10, west = 12, northwest = 14 } }
 _G.game = { tick = 0 }
+_G.log = function() end
 _G.prototypes = { entity = { character = { collision_mask = {} } } }
 _G.storage = { path_requests = {}, tasks = { by_companion = {} } }
 package.loaded["scripts.companion"] = { context = function() return "w" end }
@@ -78,7 +79,7 @@ do
   check(r == nil and st.phase == "waiting" and math.abs(c.position.x - 0.5) < 1e-9 and #c.requests == 1,
     "slow pathfinder: after 60 s the walker still waits for its one request, standing still (no blind straight line)")
   check(c.flags[1].cache == true, "requests use the engine's path cache")
-  answer(c.requests[1], { { 20.5, 0.5 }, { 40.5, 0.5 } })
+  answer(c.requests[1], { { 0.5, 0.5 }, { 20.5, 0.5 }, { 40.5, 0.5 } })
   r = run(st, c, 60 * 60)
   check(r == "arrived", "slow pathfinder: the late answer is used and the character arrives")
 end
@@ -102,7 +103,10 @@ do
   run(st, c, 2)
   answer(c.requests[1], nil)
   local r = run(st, c, 5)
-  check(type(r) == "table" and r.failed:find("no path", 1, true), "no path, far goal: fails with the reason")
+  check(r == nil and #c.requests == 2, "no path, far goal: a second, coarse search is asked for first")
+  answer(c.requests[2], nil)
+  r = run(st, c, 5)
+  check(type(r) == "table" and r.failed:find("no path", 1, true), "no path, far goal: then fails with the reason")
 
   local c2 = make_char(0.5, 0.5)
   local st2 = {}
@@ -142,8 +146,8 @@ do
   walk.step(s1, c1, 1)
   walk.step(s2, c2, 1)
   -- c2's answer first, in the same tick as c1's
-  answer(c2.requests[1], { { 30.5, 3.5 } })
-  answer(c1.requests[1], { { 30.5, 0.5 } })
+  answer(c2.requests[1], { { 0.5, 3.5 }, { 30.5, 3.5 } })
+  answer(c1.requests[1], { { 0.5, 0.5 }, { 30.5, 0.5 } })
   local r1, r2
   for _ = 1, 30 * 60 do
     game.tick = game.tick + 1
@@ -163,8 +167,21 @@ do
   run(st, c, 121 * 60) -- first request's answer is lost; the watchdog sends a second
   answer(c.requests[1], { { -30, 0.5 } }) -- stale answer for the first request
   check(storage.path_results[c.requests[1]] == nil, "stale answers (replaced request) are dropped")
-  answer(c.requests[2], { { 40.5, 0.5 } })
+  answer(c.requests[2], { { 0.5, 0.5 }, { 40.5, 0.5 } })
   check(run(st, c, 30 * 60) == "arrived", "the current request's answer is used")
+end
+
+-- 6b. a path that doesn't lead from here to the goal is not followed
+do
+  local c = make_char(0.5, 0.5)
+  local st = {}
+  walk.begin(st, c, { x = 30.5, y = 0.5 }, 1)
+  run(st, c, 2)
+  answer(c.requests[1], { { 0.5, 0.5 }, { -200, 180 } }) -- leads to a far corner, not the goal
+  run(st, c, 5)
+  check(#c.requests == 2 and math.abs(c.position.x - 0.5) < 1e-9, "a path to the wrong place is rejected; the walker asks again")
+  answer(c.requests[2], { { 0.5, 0.5 }, { 30.5, 0.5 } })
+  check(run(st, c, 30 * 60) == "arrived", "then follows the good path")
 end
 
 -- 7. the pathfinder budget setting raises the engine's per-tick limits

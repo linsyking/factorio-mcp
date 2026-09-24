@@ -73,7 +73,7 @@ local function request_path(state, c, task_id)
     radius = math.max(state.arrive_within, 0.5),
     can_open_gates = true,
     entity_to_ignore = c,
-    path_resolution_modifier = 0,
+    path_resolution_modifier = state.coarse and -2 or 0, -- coarse: faster over long distances
     -- the engine's path cache answers repeat trips fast; a re-path after
     -- getting stuck bypasses it to see new obstacles
     pathfind_flags = { cache = not state.no_cache, prefer_straight_paths = true },
@@ -139,9 +139,18 @@ local function near_blocked_goal(state, c, remaining)
 end
 
 -- No usable path: a short hop may still be walked straight (the goal itself
--- may be blocked, e.g. a rock); a long one fails with the reason.
-local function no_path(state, c, why)
+-- may be blocked, e.g. a rock); a long one first gets a second search at a
+-- coarser resolution (the engine gives up on long fine-grained searches),
+-- then fails with the reason.
+local COARSE_MIN_DIST = 40
+local function no_path(state, c, why, task_id, try_coarse)
   local d = math.sqrt(dist_sq(c.position, state.target))
+  if try_coarse and d > COARSE_MIN_DIST and not state.coarse then
+    state.coarse = true
+    state.requests = 0
+    request_path(state, c, task_id)
+    return nil
+  end
   if d <= STRAIGHT_MAX_DIST then
     state.phase = "straight"
     return nil
@@ -181,20 +190,38 @@ function M.step(state, c, task_id)
       if result.try_again_later then
         state.retries = state.retries + 1
         if state.retries > MAX_RETRIES then
-          local r = no_path(state, c, "the pathfinder stayed busy")
+          local r = no_path(state, c, "the pathfinder stayed busy", task_id)
           if r then return r end
         else
           state.phase = "retry_wait"
           state.retry_at = game.tick + RETRY_DELAY_TICKS
         end
       elseif not result.path or #result.path == 0 then
-        local r = no_path(state, c, "the pathfinder found no path")
+        local r = no_path(state, c, "the pathfinder found no path", task_id, true)
         if r then return r end
       else
-        state.path = result.path
-        state.waypoint = 1
-        state.phase = "following"
-        state.best, state.best_tick = nil, nil
+        -- Sanity check before following it: a path must start where we are
+        -- and end at the goal (a wrong answer once walked a character to a
+        -- far corner of the map).
+        local path = result.path
+        local first, last = path[1], path[#path]
+        local ok_start = dist_sq(first, c.position) <= 4 * 4
+        local ok_end = dist_sq(last, state.target) <= (state.arrive_within + 3) ^ 2
+        if not (ok_start and ok_end) then
+          log(string.format("[factorio-mcp] path %s rejected: starts %.1f tiles from the character, ends %.1f from the goal",
+            tostring(state.request_id), math.sqrt(dist_sq(first, c.position)), math.sqrt(dist_sq(last, state.target))))
+          if state.requests < MAX_REQUESTS then
+            request_path(state, c, task_id)
+          else
+            local r = no_path(state, c, "the pathfinder's path didn't lead to the goal", task_id)
+            if r then return r end
+          end
+        else
+          state.path = path
+          state.waypoint = 1
+          state.phase = "following"
+          state.best, state.best_tick = nil, nil
+        end
       end
     elseif game.tick - state.request_tick > WATCHDOG_TICKS then
       if state.requests < MAX_REQUESTS then
@@ -202,7 +229,7 @@ function M.step(state, c, task_id)
           tostring(state.request_id), WATCHDOG_TICKS / 60))
         request_path(state, c, task_id)
       else
-        local r = no_path(state, c, "the pathfinder didn't answer")
+        local r = no_path(state, c, "the pathfinder didn't answer", task_id)
         if r then return r end
       end
     end

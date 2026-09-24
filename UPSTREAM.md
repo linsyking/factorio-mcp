@@ -45,6 +45,28 @@ factorio-mcp is a fork of **[matteomekhail/Agentic-Factorio](https://github.com/
 - **Optional jobs, stop-on-failure batches, per-step `run_plan` results, strict tool arguments.**
 - **Engine mining:** hand-mining uses the engine's own mining (selected entity + `mining_state`). The character shows the mining animation, and timing and production statistics are vanilla. A script timer is the fallback when the engine can't be pointed at exactly the target.
 
+## Fixed from the second campaign report (mod 0.2.13; MCP-BUGS-RESPONSE.md)
+
+- **Belt checks:** new `trace_belt` (legs, ends, feeders and takers, and each lane's contents and fill %) and `measure_belt` (items/min per lane against capacity; flowing, backed up or empty). `inspect_entity` on a belt says which belt it feeds and which feed it. The server instructions spell out that y grows south.
+- **No silent data loss:**
+  - placing over one of your buildings now fails and names it, with its item count. `fast_replace=true` swaps it like a player (its contents move over).
+  - `deconstruct` on an empty tile no longer demolishes the nearest neighbour.
+  - `can_place` uses the same tile alignment as placing, and reports occupants.
+- **Directions:** diagonal values for 4-way buildings are rejected instead of snapping to a quarter turn.
+- **`route_pipe`:** after a pipe-to-ground exit the pipe goes straight on, since the exit connects only through its opening. Exits have their own search states.
+- **Walking:**
+  - a path that doesn't start at the character and end at the goal is rejected and asked for again;
+  - far goals with no fine path get one coarse (resolution −2) search;
+  - bulk `mine` skips ore it can't reach.
+- **Ammo:** extracted items go into the main inventory, and `equip` has `unequip=[...]`.
+- **Ground items:** `extract_items` picks them up (F) where no building covers the point.
+- **Belt inserts** fill the tile's slots (up to 8).
+- **Crafting:** the cap is 1000 per job, and there's a clearer message when intermediates run short.
+- **Other:**
+  - `say` accepts long text and cuts it at 400 characters;
+  - `scan_area` shows enemy spawners and worms on charted ground;
+  - the power line shows generator capacity.
+
 ## Fixed from the campaign bug report (mod 0.2.11; see ../BUGS.md, "Maintainer response")
 
 - Overflow items (from recipe changes and equipment swaps) are dropped on the ground, never onto belts. This was the source of the "plates from nowhere".

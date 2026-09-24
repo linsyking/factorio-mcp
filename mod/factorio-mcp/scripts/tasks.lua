@@ -45,6 +45,7 @@ local runners = {
   fight = fight,
   wait_until = require("scripts.actions.wait_until"),
   say = require("scripts.actions.say"),
+  measure_belt = require("scripts.belts").measure,
 }
 
 -- One lane (queue + active) per companion; tasks in different lanes run in

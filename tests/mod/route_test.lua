@@ -160,6 +160,26 @@ do
   end
 end
 
+-- 8b. after a pipe-to-ground exit the pipe goes straight on (the exit only connects through its opening)
+do
+  local rows = {
+    "S.#######...",
+    "..#######...",
+    "...........G",
+  }
+  local pl = route(rows, { kind = "pipe", allow_ug = true, ug_max = 10 })
+  local ok = pl ~= nil
+  for idx, p in ipairs(pl or {}) do
+    if p.kind == "ptg" and pl[idx + 1] and pl[idx - 1] and pl[idx - 1].kind == "ptg" then
+      -- p is an exit (its entrance precedes it): the next placement must be the tile in front of its opening
+      local want = core.neighbour(grid(rows), p.tile, p.d)
+      if pl[idx + 1].tile ~= want then ok = false end
+    end
+  end
+  check(ok, "pipes: the tile after a pipe-to-ground exit is straight ahead of its opening")
+  if pl then check(pl[#pl].kind == "pipe", "pipes: a route never ends on a pipe-to-ground exit") end
+end
+
 -- 9. trees cost extra but are usable (soft)
 do
   local pl = route({ "S.TTT.G", "#######" }, { allow_ug = false })

@@ -219,8 +219,43 @@ end
 
 -- --------------------------------------------------------------- rpc: equip
 
+-- Move everything out of the given equipment slots ("gun", "ammo", "armor")
+-- back into the main inventory. Returns what was moved.
+local SLOT_INV = { gun = "character_guns", ammo = "character_ammo", armor = "character_armor" }
+local function unequip(c, kinds)
+  local main = c.get_main_inventory()
+  local moved = {}
+  for _, kind in ipairs(kinds) do
+    local def = SLOT_INV[kind]
+    if not def then error("unequip takes gun, ammo and/or armor, not '" .. tostring(kind) .. "'") end
+    local inv = c.get_inventory(defines.inventory[def])
+    if inv then
+      for i = 1, #inv do
+        local st = inv[i]
+        if st and st.valid_for_read then
+          local name, count = st.name, st.count
+          local put = main.insert(st)
+          if put > 0 then
+            st.count = count - put
+            moved[#moved + 1] = string.format("%d %s", put, name)
+          end
+        end
+      end
+    end
+  end
+  return moved
+end
+
 function M.equip(params)
   local c = companion.require_companion()
+  if type(params.unequip) == "table" and #params.unequip > 0 then
+    local moved = unequip(c, params.unequip)
+    if params.gun == nil and params.ammo == nil and params.armor == nil then
+      local out = M.summary(c)
+      out.unequipped = moved
+      return out
+    end
+  end
   if params.gun == nil and params.ammo == nil and params.armor == nil then
     error("equip needs at least one of gun, ammo, armor — item names from my inventory,"
       .. " e.g. gun=\"pistol\", ammo=\"firearm-magazine\"")

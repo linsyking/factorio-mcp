@@ -26,6 +26,7 @@ local runner = {
   tick = function(t) return { status = t.outcome or "done", detail = "x" } end,
 }
 runner.place, runner.rotate, runner.set_recipe = runner, runner, runner
+package.loaded["scripts.belts"] = { measure = runner, trace = function() end }
 runner.insert, runner.extract, runner.deliver = runner, runner, runner
 for _, m in ipairs({ "walk", "follow", "mine", "build", "craft", "transfer", "refuel",
   "drive", "build_plan", "deconstruct", "fight", "defend", "build_blueprint", "wait_until", "say" }) do

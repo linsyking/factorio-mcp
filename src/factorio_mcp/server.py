@@ -18,7 +18,11 @@ INSTRUCTIONS = """\
 You control ONE Factorio character, named "{character}". Every tool acts as that character.
 
 Model of the world:
-- Coordinates are map tiles: x grows east, y grows south. Directions are 16-way: 0=north, 4=east, 8=south, 12=west.
+- Coordinates are map tiles: x grows east, y grows SOUTH. So north is smaller y: (5, -29) is north of (5, -28), and a
+  belt facing south (8) at y = -28 feeds y = -27. Directions are 16-way: 0=north, 4=east, 8=south, 12=west; most
+  buildings face only those four.
+- After building belts, check them: trace_belt shows where a line goes, how it ends (a dead end backs everything up),
+  what feeds it and what's on each lane; measure_belt counts real throughput per lane against the belt's capacity.
 - Item names are internal names ("iron-plate"); other qualities are written "name@quality" ("iron-plate@rare").
 - Multi-tick actions (walking, mining, crafting, placing, building, fighting, duties) run as jobs on your character, one
   after another in order. A job tool queues its job behind your earlier ones and waits up to wait_s seconds (default

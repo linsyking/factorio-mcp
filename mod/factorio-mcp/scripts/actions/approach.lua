@@ -146,7 +146,7 @@ function M.pick_entity(candidates, pos, accept)
       .. "took the first — use a point inside the building you mean", pos.x, pos.y, inside.name,
       inside.position.x, inside.position.y, rival.name, rival.position.x, rival.position.y)
   end
-  return inside or near, note
+  return inside or near, note, inside ~= nil
 end
 
 function M.find_entity_near(c, pos, radius)

@@ -215,6 +215,24 @@ local function collect_power(surface, force, origin, radius, structures)
     out.top_consumers_kw = top
   end)
 
+  -- Capacity: what the network's generators could deliver at most (the
+  -- production figure only follows demand, so it looks like a ceiling).
+  pcall(function()
+    local cap_j, gens = 0, 0
+    for _, g in ipairs(surface.find_entities_filtered({ force = force, limit = 3000,
+      type = { "generator", "burner-generator", "solar-panel", "fusion-generator", "electric-energy-interface" } })) do
+      local ok, id = pcall(function() return g.electric_network_id end)
+      if ok and id == best_id then
+        local okp, j = pcall(function() return g.prototype.get_max_energy_production(g.quality) end)
+        if okp and j then cap_j = cap_j + j gens = gens + 1 end
+      end
+    end
+    if gens > 0 then
+      out.capacity_kw = math.floor(cap_j * 60 / 1000 + 0.5)
+      out.generators = gens
+    end
+  end)
+
   -- Machines starving for power right now (from the status histograms).
   local starving = 0
   for _, g in ipairs(structures or {}) do

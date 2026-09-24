@@ -61,6 +61,8 @@ function M.activity(name)
     s = "inserting items"
   elseif t.type == "extract" then
     s = "taking items out"
+  elseif t.type == "measure_belt" and type(t.target) == "table" then
+    s = string.format("measuring the belt at (%.0f, %.0f)", t.target.x or 0, t.target.y or 0)
   elseif t.type == "wait_until" then
     if t.research then s = "waiting for research " .. tostring(t.research)
     elseif t.item then s = string.format("waiting for %d %s", t.count or 1, tostring(t.item))

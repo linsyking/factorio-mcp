@@ -194,6 +194,11 @@ function M.search(g, opts)
     return e
   end
 
+  -- States are tile*4 + d. Pipe-to-ground exits get their own states
+  -- (N4 + tile*4 + d): from an exit only its opening connects, so an exit
+  -- arrival must not block a plain-pipe arrival at the same tile.
+  local N4 = g.W * g.H * 4
+  local function tile_of(st) return math.floor((st % N4) / 4) end
   local gscore, parent, move = {}, {}, {}
   local open = heap_new()
   for _, s in ipairs(opts.starts) do
@@ -222,7 +227,7 @@ function M.search(g, opts)
       gscore[to] = ng
       parent[to] = from
       move[to] = mv
-      heap_push(open, ng + weight * h(math.floor(to / 4)), to)
+      heap_push(open, ng + weight * h(tile_of(to)), to)
     end
   end
 
@@ -232,8 +237,9 @@ function M.search(g, opts)
     if not st then break end
     if not closed[st] then
       closed[st] = true
-      local i, d = math.floor(st / 4), st % 4
-      local goal_ok = opts.goal_tiles[i]
+      local i, d = tile_of(st), st % 4
+      local from_ptg = st >= N4
+      local goal_ok = opts.goal_tiles[i] and not from_ptg -- a pipe route never ends on an exit
       if goal_ok and opts.goal_dirs and opts.goal_dirs[i] then goal_ok = opts.goal_dirs[i][d] end
       if goal_ok then found = st break end
       expansions = expansions + 1
@@ -258,8 +264,9 @@ function M.search(g, opts)
           end
         end
       else
+        -- after a pipe-to-ground exit only its opening connects: go straight on
         for d2 = 0, 3 do
-          local n = neighbour(g, i, d2)
+          local n = (not from_ptg or d2 == d) and neighbour(g, i, d2) or nil
           if n then
             if pipe_ok(n) then relax(st, n * 4 + d2, c_step + extra(n), 0) end
             if opts.allow_ug and ptg_ok(n, M.opposite(d2)) then
@@ -267,7 +274,7 @@ function M.search(g, opts)
                 local m = step_to(g, n, d2, k)
                 if not m then break end
                 if ptg_ok(m, d2) and not ug_conflict(g, n, m, d2, opts.ug_name, opts.ug_max or 10) then
-                  relax(st, m * 4 + d2, k * c_step + c_ug + extra(n) + extra(m), k)
+                  relax(st, N4 + m * 4 + d2, k * c_step + c_ug + extra(n) + extra(m), k)
                 end
               end
             end
@@ -291,7 +298,7 @@ function M.search(g, opts)
   local path = {}
   for k = #rev, 1, -1 do
     local s = rev[k]
-    path[#path + 1] = { tile = math.floor(s / 4), d = s % 4, move = move[s], state = s }
+    path[#path + 1] = { tile = tile_of(s), d = s % 4, move = move[s], state = s }
   end
   return path, { expansions = expansions, cost = gscore[found] }
 end

@@ -61,16 +61,23 @@ M.insert = {}
 -- lane, as long as there is room); LuaEntity.insert refuses belts.
 local BELTS = { ["transport-belt"] = true, ["underground-belt"] = true, splitter = true }
 
+-- Slots along one belt tile's lane (0 = its output end): a player dropping
+-- items fills the tile; up to 4 per lane, 8 per tile.
+local SLOTS = { 0.875, 0.625, 0.375, 0.125 }
+
 local function belt_insert(e, spec)
   local n = 0
   pcall(function()
-    local max_i = 2
-    pcall(function() max_i = e.get_max_transport_line_index() end)
+    local max_i = math.min(e.get_max_transport_line_index(), 2)
     for i = 1, max_i do
       local line = e.get_transport_line(i)
-      while n < spec.count and line.can_insert_at_back() do
-        if not line.insert_at_back({ name = spec.name, count = 1, quality = spec.quality }) then break end
-        n = n + 1
+      for _, at in ipairs(SLOTS) do
+        if n >= spec.count then break end
+        local ok = false
+        pcall(function()
+          if line.can_insert_at(at) then ok = line.insert_at(at, { name = spec.name, count = 1, quality = spec.quality }) end
+        end)
+        if ok then n = n + 1 end
       end
       if n >= spec.count then break end
     end
@@ -166,7 +173,10 @@ local function pull(c, source, is_inventory, key, count)
     removed = source.remove_item(items.spec(key, count))
   end
   if removed == 0 then return 0, 0 end
-  local kept = c.insert(items.spec(key, removed))
+  -- into the main inventory: the character's own insert would load ammo
+  -- straight into the gun's ammo slot
+  local main = c.get_main_inventory()
+  local kept = (main or c).insert(items.spec(key, removed))
   if kept < removed then
     -- give back what didn't fit (belts refuse LuaEntity.insert: use their lanes)
     if is_inventory then
@@ -263,7 +273,36 @@ function M.extract.tick(task)
   if type(reached) == "table" then return reached end
   if reached ~= "ok" then return nil end
 
-  local e, pick_note = approach.find_entity_near(c, task.target)
+  local e, pick_note, inside = approach.find_entity_near(c, task.target)
+  -- Items lying on the ground at the point (and no building covering it):
+  -- pick them up, like a player pressing F over them.
+  if not inside then
+    local ground = c.surface.find_entities_filtered({ position = task.target, radius = 0.7, type = "item-entity" })
+    if #ground > 0 then
+      local want
+      if not task._all then
+        want = {}
+        for _, it in ipairs(task._items) do want[it.name] = true end
+      end
+      local main = c.get_main_inventory()
+      local got, total = {}, 0
+      for _, g in ipairs(ground) do
+        local st = g.valid and g.stack
+        if st and st.valid_for_read and (not want or want[st.name]) then
+          local name, count = st.name, st.count
+          local put = main.insert({ name = name, count = count, quality = st.quality })
+          if put >= count then g.destroy() elseif put > 0 then st.count = count - put end
+          if put > 0 then got[name] = (got[name] or 0) + put total = total + put end
+        end
+      end
+      if total > 0 then
+        local parts = {}
+        for name, n in pairs(got) do parts[#parts + 1] = string.format("%d %s", n, name) end
+        table.sort(parts)
+        return { status = "done", detail = "picked up " .. table.concat(parts, ", ") .. " from the ground" }
+      end
+    end
+  end
   task._pick_note = pick_note
   if not e then return no_entity(task, "extract from") end
 

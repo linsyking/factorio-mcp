@@ -89,6 +89,14 @@ Task types:
 
 Every task with a map target walks within reach first, and each movement goal is checked against the exploration rule.
 
+### Belt checks
+
+- `trace_belt {position}` follows the line through the belt at `position` both ways, up to 400 tiles each way, on known ground. It goes through turns, undergrounds and splitters.
+  - It returns `{start, tiles, legs, begins, ends, fed_by, taken_by, lane_capacity_per_min}`.
+  - Each leg is a run in one direction: `{from, to, tiles, moving, kind?, left, right, left_side, right_side, fill_left, fill_right}`. Lanes are named by the direction of travel, with the compass side they're on.
+  - `ends` describes a dead end, a side-load onto another belt, a building the line faces, or unexplored ground.
+- Job `measure_belt {target, seconds}` samples the tile every 2 ticks and counts items (by unique id) that arrive on each lane after the first sample. It reports items/min per lane against the capacity (belt speed × 4 items per tile × belt stacking), and whether the belt is flowing, backed up (nothing moved) or empty.
+
 ### Map overview
 
 `map_overview {center?, radius≤640}` visits every KNOWN chunk in the square once. It counts resources by name, rocks, trees, water tiles and enemy spawners and worms, then groups each category into 4-connected chunk components. It returns `{known_chunks, total_chunks, groups: [{kind, count, chunks, center, at, area, distance}], more}`, nearest first (at most 60). `at` is a real tile of the patch.

@@ -44,19 +44,20 @@ function M.start(task)
   -- game.get_entity_by_unit_number, which returns nil for most entities.
   local targets = {}
   if task.target and type(task.target.x) == "number" and type(task.target.y) == "number" then
-    local best, best_d
-    for _, e in ipairs(c.surface.find_entities_filtered({
-      position = task.target, radius = 2, force = c.force,
-    })) do
-      if is_demolishable(e, c) then
-        local d = dist_sq(e.position, task.target)
-        if not best or d < best_d then best, best_d = e, d end
-      end
-    end
+    -- Only a building that covers the point (or the tile a whole-number
+    -- point names): demolishing the nearest neighbour of an empty tile
+    -- destroyed good belts one after another.
+    local candidates = c.surface.find_entities_filtered({ position = task.target, radius = 2, force = c.force })
+    local best, note, inside = approach.pick_entity(candidates, task.target, function(e) return is_demolishable(e, c) end)
     if not best then
       error(string.format("no building of ours within 2 tiles of (%.1f, %.1f)",
         task.target.x, task.target.y))
     end
+    if not inside then
+      error(string.format("nothing of ours at (%.1f, %.1f) — the nearest building is the %s at (%.1f, %.1f); "
+        .. "pass its position to take it down", task.target.x, task.target.y, best.name, best.position.x, best.position.y))
+    end
+    task._pick_note = note
     targets[1] = best
   elseif task.area and task.area.center and type(task.area.center.x) == "number" then
     local radius = math.min(tonumber(task.area.radius) or 5, AREA_MAX_RADIUS)

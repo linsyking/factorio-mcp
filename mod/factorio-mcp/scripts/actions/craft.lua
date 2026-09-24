@@ -7,7 +7,7 @@ local stats = require("scripts.stats")
 local M = {}
 
 local POLL_TICKS = 30
-local MAX_COUNT = 100
+local MAX_COUNT = 1000
 
 -- What's short for `count` crafts, e.g. "2x iron-plate, 1x iron-gear-wheel".
 -- Must run BEFORE begin_crafting consumes the ingredients.
@@ -32,7 +32,8 @@ function M.start(task)
   end
   local count = math.floor(tonumber(task.count) or 1)
   if count < 1 then count = 1 end
-  if count > MAX_COUNT then count = MAX_COUNT end
+  local capped = count > MAX_COUNT
+  if capped then count = MAX_COUNT end
   task.count = count
 
   local r = c.force.recipes[task.recipe]
@@ -57,10 +58,16 @@ function M.start(task)
     if missing ~= "" then
       error("can't craft " .. task.recipe .. " — missing ingredients: " .. missing)
     end
-    error("can't craft " .. task.recipe .. " — this recipe can't be crafted by hand")
+    local handcraftable = false
+    pcall(function() handcraftable = c.prototype.crafting_categories[r.category] == true end)
+    if handcraftable then
+      error("can't craft " .. task.recipe .. " — not enough ingredients for its intermediates (the whole chain is "
+        .. "checked); craftable now: " .. tostring(c.get_craftable_count(task.recipe)))
+    end
+    error("can't craft " .. task.recipe .. " — this recipe can't be crafted by hand (category " .. tostring(r.category) .. ")")
   end
 
-  local note = ""
+  local note = capped and string.format(" (capped at %d per job)", MAX_COUNT) or ""
   if started < count then
     note = string.format(" (only started %d of %d — missing ingredients: %s)",
       started, count, missing ~= "" and missing or "not enough materials")

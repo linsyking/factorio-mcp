@@ -89,7 +89,7 @@ Claude Code (`.mcp.json` in the project), one entry per agent:
 
 Without a native MCP client, `factorio-mcp call TOOL '{json}' TOOL2 …` runs tool calls through a real MCP client session.
 
-## Tools (49)
+## Tools (51)
 
 | Group | Tools |
 |---|---|
@@ -99,7 +99,7 @@ Without a native MCP client, `factorio-mcp call TOOL '{json}' TOOL2 …` runs to
 | Chat and events | `read_chat`, `get_events`, `wait_for_events` (long-poll), `say`, `set_status` (a line for people watching) |
 | Instant actions | `start_research`, `equip`, `exit_vehicle`, `set_train_schedule`, `respawn` |
 | Jobs | `walk_to`, `drive_to`, `follow_player`, `mine`, `place_entity`, `craft_items`, `insert_items`, `extract_items`, `set_recipe`, `rotate_entity`, `build_plan` (up to 100 steps, `dry_run`), `run_plan` (chained steps, including `wait_until`), `wait_until` (seconds, an item count in an entity or your inventory, or a research), `deconstruct`, `fight`, `defend_area`, `keep_fueled` |
-| Routing | `route_belt`, `route_pipe` (plan on explored ground; `build=true` queues normal build jobs) |
+| Routing and belt checks | `route_belt`, `route_pipe` (plan on explored ground; `build=true` queues normal build jobs), `trace_belt` (a line's legs, ends, feeders and takers, and each lane's contents and fill %), `measure_belt` (items/min passing a tile, per lane, against capacity; flowing, backed up or empty) |
 | Job control | `job_status`, `job_wait`, `job_cancel` |
 
 Other conventions:

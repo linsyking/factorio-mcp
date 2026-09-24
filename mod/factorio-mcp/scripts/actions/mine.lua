@@ -235,7 +235,9 @@ end
 
 -- ------------------------------------------------------------- composite
 
-local function find_nearest_match(c, matcher)
+local function key_of(e) return string.format("%.1f,%.1f", e.position.x, e.position.y) end
+
+local function find_nearest_match(c, matcher, skip)
   local filter = { position = c.position, radius = COMPOSITE_SEARCH_RADIUS }
   if matcher.name then
     filter.name = matcher.name
@@ -245,7 +247,7 @@ local function find_nearest_match(c, matcher)
   local candidates = vision.filter_known(c.surface.find_entities_filtered(filter), c.surface, c.force)
   local best, best_d
   for _, e in ipairs(candidates) do
-    if e.valid and e.prototype.mineable_properties.minable then
+    if e.valid and e.prototype.mineable_properties.minable and not (skip and skip[key_of(e)]) then
       local d = dist_sq(e.position, c.position)
       if not best or d < best_d then
         best, best_d = e, d
@@ -305,7 +307,7 @@ local function tick_composite(task, c)
     e = nil
   end
   if not (e and e.valid) then
-    e = find_nearest_match(c, m.matcher)
+    e = find_nearest_match(c, m.matcher, m.skip)
     task._entity = e
     task._approach = nil
     m.remaining = nil
@@ -328,7 +330,19 @@ local function tick_composite(task, c)
   end
 
   local reached = approach.ensure(task, c, e.position, c.resource_reach_distance)
-  if type(reached) == "table" then return reached end
+  if type(reached) == "table" then
+    -- boxed in (drills, chests around it): try the next nearest instead
+    m.skip = m.skip or {}
+    m.skipped = (m.skipped or 0) + 1
+    if m.skipped > 5 then
+      return { status = m.ops > 0 and "done" or "failed", detail = (m.ops > 0 and (composite_summary(task, m) .. " — stopped: ")
+        or "") .. "couldn't reach the nearest " .. task.resource .. " (5 spots tried): " .. tostring(reached.detail) }
+    end
+    m.skip[key_of(e)] = true
+    task._entity, task._approach, m.watch = nil, nil, nil
+    c.mining_state = { mining = false }
+    return nil
+  end
   if reached ~= "ok" then return nil end
 
   local result = run_mining_op(task, c, m)

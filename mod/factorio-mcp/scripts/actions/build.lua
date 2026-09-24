@@ -55,6 +55,8 @@ function M.place.start(task)
   end
   task.direction = math.floor(tonumber(task.direction) or 0) % 16
   task._entity_name = result.name
+  local bad_dir = placement.check_direction(result.name, task.direction)
+  if bad_dir then error(bad_dir) end
   task.position = placement.snap(result, task.position, task.direction)
   if task.recipe ~= nil then
     -- checked before walking, like set_recipe
@@ -81,6 +83,16 @@ function M.place.tick(task)
   if type(aside) == "table" then return aside end
   if aside ~= "ok" then return nil end
 
+  local occ, occ_items = placement.occupant(c, task._entity_name, task.position, task.direction)
+  if occ and not task.fast_replace then
+    return {
+      status = "failed",
+      detail = string.format("the %s at (%.1f, %.1f)%s is in the way — deconstruct it first, or pass fast_replace=true "
+        .. "to swap it like a player does (its contents move over)", occ.name, occ.position.x, occ.position.y,
+        occ_items > 0 and string.format(" holding %d items", occ_items) or ""),
+    }
+  end
+
   local can_place = c.surface.can_place_entity({
     name = task._entity_name,
     position = task.position,
@@ -104,6 +116,10 @@ function M.place.tick(task)
     quality = task._quality,
     type = task.underground_type, -- underground belts: "input" or "output"
     raise_built = true,
+    -- a player-style fast replace: the old building goes to this character
+    -- and its contents into the new one (what fits)
+    fast_replace = occ ~= nil and task.fast_replace == true or nil,
+    character = (occ ~= nil and task.fast_replace == true) and c or nil,
   })
   if not built then
     return {

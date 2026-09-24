@@ -69,6 +69,7 @@ class BuildStep(BaseModel):
     direction: int | None = Field(None, ge=0, le=15, description="16-way; an inserter's direction is the side it picks up from")
     drop_to: Point | None = Field(None, description=DROP_TO)
     pickup_from: Point | None = Field(None, description=PICKUP_FROM)
+    fast_replace: bool | None = Field(None, description="swap one of your buildings standing there (else the step fails)")
     recipe: str | None = Field(None, description="recipe to set on the placed machine")
     insert: dict[str, int] | None = Field(None, description="items to move from your inventory into the placed entity")
     underground_type: Literal["input", "output"] | None = Field(None, description="underground belts: input = entrance, output = exit")
@@ -76,7 +77,7 @@ class BuildStep(BaseModel):
 
 class PlanStep(BaseModel):
     type: Literal["craft", "insert", "extract", "mine", "place", "set_recipe", "rotate", "walk_to", "wait_until", "say"]
-    text: str | None = Field(None, max_length=400, description="say: what to say when this step runs")
+    text: str | None = Field(None, max_length=4000, description="say: what to say when this step runs (cut to 400 characters)")
     recipe: str | None = Field(None, description="craft: the recipe to craft; place / set_recipe: the recipe to set on the machine")
     count: int | None = Field(None, ge=1, le=10000, description="craft: recipe executions (a belt craft makes 2); "
                               "mine: mining operations; wait_until: the item count to wait for")
@@ -93,6 +94,7 @@ class PlanStep(BaseModel):
     drop_to: Point | None = Field(None, description=DROP_TO)
     pickup_from: Point | None = Field(None, description=PICKUP_FROM)
     optional: bool | None = Field(None, description="true: if this step fails, the steps after it still run (e.g. a fuel top-up)")
+    fast_replace: bool | None = Field(None, description="place: swap one of your buildings standing there (else the step fails)")
 
 
 class TrainStop(BaseModel):
@@ -512,7 +514,8 @@ def register(app: MCPServer, game: Game) -> None:
 
     @tool("Say something in game chat as your character: at once, or with queued=true when the jobs queued before "
           "it have run (so an announcement doesn't come before the work it describes).")
-    async def say(text: Annotated[str, Field(min_length=1, max_length=400)], queued: bool = False) -> str:
+    async def say(text: Annotated[str, Field(min_length=1, max_length=4000, description="cut to 400 characters in game")],
+                  queued: bool = False) -> str:
         if queued:
             return await run_job({"type": "say", "text": text}, None)
         await game.call("say", {"text": text})
@@ -523,10 +526,17 @@ def register(app: MCPServer, game: Game) -> None:
         r = await game.call("start_research", {"technology": technology})
         return f"Research queued: {r['technology']}."
 
-    @tool("Move a gun, ammo and/or armor from your main inventory into your equipment slots.")
-    async def equip(gun: str | None = None, ammo: str | None = None, armor: str | None = None) -> str:
-        r = await game.call("equip", {"gun": gun, "ammo": ammo, "armor": armor})
-        return f"Equipped — gun {r.get('gun') or 'none'}, ammo {fmt.items_text(r.get('ammo')) or 'none'}, armor {r.get('armor') or 'none'}."
+    @tool("Move a gun, ammo and/or armor from your main inventory into your equipment slots, and/or unequip slots "
+          "(unequip=[\"ammo\"] moves the ammo slot's contents back to the main inventory; crafted or picked-up ammo "
+          "goes into the gun's ammo slot by itself).")
+    async def equip(gun: str | None = None, ammo: str | None = None, armor: str | None = None,
+                    unequip: list[Literal["gun", "ammo", "armor"]] | None = None) -> str:
+        if not (gun or ammo or armor or unequip):
+            raise ValueError("give gun, ammo, armor and/or unequip")
+        r = await game.call("equip", {"gun": gun, "ammo": ammo, "armor": armor, "unequip": unequip})
+        moved = as_list(r.get("unequipped"))
+        head = f"Moved {', '.join(moved)} to the main inventory. " if moved else ""
+        return head + f"Equipped — gun {r.get('gun') or 'none'}, ammo {fmt.items_text(r.get('ammo')) or 'none'}, armor {r.get('armor') or 'none'}."
 
     @tool("Leave the vehicle you are in.")
     async def exit_vehicle() -> str:
@@ -582,15 +592,18 @@ def register(app: MCPServer, game: Game) -> None:
                            underground_type: Annotated[Literal["input", "output"] | None, Field(description="underground belts: input = entrance, output = exit")] = None,
                            drop_to: Annotated[Point | None, Field(description=DROP_TO)] = None,
                            pickup_from: Annotated[Point | None, Field(description=PICKUP_FROM)] = None,
+                           fast_replace: Annotated[bool, Field(description="if one of your buildings is in the way, swap it like a "
+                                                               "player does (it goes to your inventory, its contents into the new one); "
+                                                               "otherwise the placement fails")] = False,
                            wait_s: WaitS = None, replace: Replace = False) -> str:
         direction = resolve_direction(x, y, direction, drop_to, pickup_from)
         return await run_job({"type": "place", "item": item, "position": {"x": x, "y": y}, "direction": direction,
-                              "underground_type": underground_type}, wait_s, replace)
+                              "underground_type": underground_type, "fast_replace": fast_replace}, wait_s, replace)
 
     @tool("Hand-craft with your character's crafting queue (real crafting time; missing intermediates are queued too). "
           "count is the number of recipe executions: one transport-belt craft makes 2 belts, one copper-cable craft "
           "makes 2 cables.")
-    async def craft_items(recipe: str, count: Annotated[int, Field(ge=1, le=100)] = 1,
+    async def craft_items(recipe: str, count: Annotated[int, Field(ge=1, le=1000)] = 1,
                           wait_s: WaitS = None, replace: Replace = False) -> str:
         return await run_job({"type": "craft", "recipe": recipe, "count": count}, wait_s, replace)
 
@@ -729,7 +742,7 @@ def register(app: MCPServer, game: Game) -> None:
                 + "\n".join("  " + w for w in warns)) if warns else ""
         task = {"type": "build_plan", "stop_on_error": stop_on_error, "auto_craft": auto_craft, "steps": [
             {"item": s.item, "position": {"x": s.x, "y": s.y}, "direction": s.direction, "recipe": s.recipe, "insert": s.insert,
-             "underground_type": s.underground_type}
+             "underground_type": s.underground_type, "fast_replace": s.fast_replace}
             for s in steps]}
         try:
             return await run_job(task, wait_s, replace) + note
@@ -911,6 +924,21 @@ def register(app: MCPServer, game: Game) -> None:
                     raise ToolError("\n".join(lines) + f"\nJob #{jid} ({jr.type}) failed: {jr.detail}; the rest was cancelled.")
         lines.append(describe(res, waited))
         return "\n".join(lines)
+
+    @tool("Check a belt line: follows it both ways from the belt at x,y (through turns, undergrounds and splitters) and "
+          "lists its legs (which way items move), how it starts and ends (dead end, side-load, a building it can't "
+          "feed), what feeds it (inserters, drills, side-loads) and what takes from it, and the items on each lane "
+          "with fill %. Use after building a belt; measure_belt checks real throughput.")
+    async def trace_belt(x: Coord, y: Coord) -> str:
+        return fmt.belt_trace(await game.call("trace_belt", {"position": {"x": x, "y": y}}))
+
+    @tool("Queue a job that watches the belt at x,y for `seconds` and counts the items that actually pass, per lane, "
+          "against the belt's capacity (a yellow belt: 450/min per lane, 900/min in total). It says whether the belt "
+          "is flowing, backed up (items not moving) or empty. Waits for the result by default.")
+    async def measure_belt(x: Coord, y: Coord, seconds: Annotated[float, Field(ge=2, le=120)] = 10,
+                           wait_s: WaitS = None, replace: Replace = False) -> str:
+        return await run_job({"type": "measure_belt", "target": {"x": x, "y": y}, "seconds": seconds},
+                             seconds + 20 if wait_s is None else wait_s, replace)
 
     @tool("Plan a belt route between two points on explored ground and optionally build it (build=true queues normal "
           "build jobs: items from your inventory, auto-crafted if missing). A* over tiles and facings with underground "

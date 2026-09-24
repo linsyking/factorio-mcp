@@ -70,6 +70,12 @@ function M.start(task)
     if why then
       error(string.format("step %d is malformed: %s", i, why))
     end
+    local ip = prototypes.item[(items.parse(step.item))]
+    local ep = step.entity or (ip and ip.place_result and ip.place_result.name)
+    if ep then
+      local bad_dir = placement.check_direction(ep, step.direction)
+      if bad_dir then error(string.format("step %d: %s", i, bad_dir)) end
+    end
   end
 
   for _, step in ipairs(task.steps) do
@@ -301,6 +307,14 @@ function M.tick(task)
   end
   if aside ~= "ok" then return nil end
 
+  -- never place over one of our buildings unless asked (it would be destroyed with its contents)
+  local occ, occ_items = placement.occupant(c, entity_name, step.position, step.direction)
+  if occ and not step.fast_replace then
+    return advance(task, false, string.format("the %s at (%.1f, %.1f)%s is in the way — deconstruct it first, or "
+      .. "set fast_replace on the step", occ.name, occ.position.x, occ.position.y,
+      occ_items > 0 and string.format(" holding %d items", occ_items) or ""))
+  end
+
   local can_place = c.surface.can_place_entity({
     name = entity_name,
     position = step.position,
@@ -321,6 +335,8 @@ function M.tick(task)
     quality = item_quality,
     type = step.underground_type, -- underground belts: "input" (entrance) or "output" (exit)
     raise_built = true,
+    fast_replace = occ ~= nil and step.fast_replace == true or nil,
+    character = (occ ~= nil and step.fast_replace == true) and c or nil,
   })
   if not built then
     return advance(task, false, string.format(

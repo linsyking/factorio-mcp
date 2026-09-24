@@ -47,6 +47,7 @@ function M.say(params)
     error("say requires text")
   end
   local name = companion.context()
+  if #params.text > 400 then params.text = params.text:sub(1, 397) .. "..." end
   game.print("[color=#4EC9B0][" .. name .. "][/color] " .. params.text)
   M.log_bot_line(name, params.text)
   return {}

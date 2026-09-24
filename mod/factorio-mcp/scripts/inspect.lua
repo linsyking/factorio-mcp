@@ -300,6 +300,17 @@ local function inspect_one(params)
   if lanes then
     out.belt_lanes = lanes
     out.belt_direction = e.direction
+    -- where items go next, and where they come from (y grows south)
+    pcall(function()
+      local bn = e.belt_neighbours
+      local function xy(t) return { x = round1(t.position.x), y = round1(t.position.y) } end
+      local outs = bn.outputs or {}
+      if e.type == "underground-belt" and e.belt_to_ground_type == "input" and e.neighbours then outs = { e.neighbours } end
+      if outs[1] then out.belt_feeds = xy(outs[1]) end
+      local ins = {}
+      for _, i in ipairs(bn.inputs or {}) do ins[#ins + 1] = xy(i) end
+      out.belt_fed_by = ins
+    end)
   end
 
   collect_fluids(e, out)

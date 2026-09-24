@@ -118,7 +118,7 @@ function M.scan_area(params)
     ["R"] = "rock",
     ["@"] = "you",
     ["P"] = "player or another agent character",
-    ["E"] = "enemy",
+    ["E"] = "enemy (unit in view, or a spawner/worm on charted ground)",
     ["^"] = "your transport belt moving north (toward smaller y)",
     [">"] = "your transport belt moving east",
     ["v"] = "your transport belt moving south (toward larger y)",
@@ -192,9 +192,23 @@ function M.scan_area(params)
   -- Entity pass: one scan over the whole box. Buildings paint every tile of
   -- their footprint; everything else paints its center tile.
   local enemy_force = game.forces.enemy
-  local entities = vision.filter_perceivable(surface.find_entities_filtered({
-    area = { { ox, oy }, { ox + size, oy + size } },
-  }), surface, c.force)
+  local in_box = surface.find_entities_filtered({ area = { { ox, oy }, { ox + size, oy + size } } })
+  local entities = vision.filter_perceivable(in_box, surface, c.force)
+  -- Enemy bases (spawners, worms) are on the map wherever it is charted, as
+  -- for a player; moving enemies still need to be in view.
+  do
+    local have = {}
+    for _, e in ipairs(entities) do have[e] = true end
+    local static = {}
+    for _, e in ipairs(in_box) do
+      if e.valid and e.force == enemy_force and (e.type == "unit-spawner" or e.type == "turret") then
+        static[#static + 1] = e
+      end
+    end
+    for _, e in ipairs(vision.filter_known(static, surface, c.force)) do
+      if not have[e] then entities[#entities + 1] = e end
+    end
+  end
   for _, e in ipairs(entities) do
     if e.valid then
         local ch, p
@@ -328,6 +342,18 @@ local function can_place_one(c, surface, item, position, direction)
   if not entity_proto then
     error(item .. " is not a placeable item — it doesn't turn into a building")
   end
+  -- the same tile alignment as placing: (8, -7) for a 1x1 chest means tile (8, -7)
+  pos = placement.snap(entity_proto, pos, direction)
+  local bad_dir = placement.check_direction(entity_proto.name, direction)
+  if bad_dir then return { can_place = false, reason = bad_dir, position = pos } end
+
+  -- our own building there: placing would destroy it (unless fast_replace)
+  local occ, occ_items = placement.occupant(c, entity_proto.name, pos, direction)
+  if occ then
+    return { can_place = false, position = pos, reason = string.format(
+      "the %s at (%.1f, %.1f)%s is in the way — deconstruct it first, or place with fast_replace=true",
+      occ.name, occ.position.x, occ.position.y, occ_items > 0 and string.format(" holding %d items", occ_items) or "") }
+  end
 
   local ok = surface.can_place_entity({
     name = entity_proto.name,
@@ -337,11 +363,11 @@ local function can_place_one(c, surface, item, position, direction)
     build_check_type = defines.build_check_type.manual,
   })
   if ok then
-    return { can_place = true }
+    return { can_place = true, position = pos }
   end
 
   local reason = placement.explain(c, entity_proto.name, pos, direction)
-  return { can_place = false, reason = reason }
+  return { can_place = false, reason = reason, position = pos }
 end
 
 local MAX_PLACEMENTS = 24

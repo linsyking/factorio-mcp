@@ -87,6 +87,11 @@ def state(s: dict[str, Any]) -> str:
         bits = []
         if p.get("production_kw") is not None:
             bits.append(f"producing {num(p['production_kw'])} kW, using {num(p.get('consumption_kw', 0))} kW")
+        if p.get("capacity_kw"):
+            cap = p["capacity_kw"]
+            used = round(100 * (p.get("production_kw") or 0) / cap) if cap else 0
+            bits.append(f"capacity {num(cap)} kW from {p.get('generators')} generator(s) — {used}% in use "
+                        f"(production follows demand; headroom is capacity minus production)")
         top = p.get("top_consumers_kw") or {}
         if top:
             bits.append("top consumers: " + ", ".join(f"{n} {num(kw)} kW" for n, kw in top.items()))
@@ -130,6 +135,11 @@ def inspect(e: dict[str, Any]) -> str:
         d = e.get("belt_direction")
         # left/right of the direction of travel, and which compass side that is
         sides = {0: ("west", "east"), 4: ("north", "south"), 8: ("east", "west"), 12: ("south", "north")}
+        if "belt_feeds" in e or "belt_fed_by" in e:
+            f = e.get("belt_feeds")
+            ins = as_list(e.get("belt_fed_by"))
+            parts.append(("Feeds " + (f"the belt at ({f['x']}, {f['y']})" if f else "nothing (a dead end: items stop here)"))
+                         + "; fed by " + (", ".join(f"({i['x']}, {i['y']})" for i in ins) if ins else "no belt") + ".")
         if isinstance(lanes, dict):
             ls, rs = sides.get(d, ("", ""))
             moving = {0: "north", 4: "east", 8: "south", 12: "west"}.get(d)
@@ -339,4 +349,25 @@ def overview(r: dict[str, Any]) -> str:
         lines.append(f"  … and {r['more']} more farther away (lower the radius or move the centre).")
     if not groups_all:
         lines.append("  nothing known here yet.")
+    return "\n".join(lines)
+
+
+def belt_trace(r: dict[str, Any]) -> str:
+    def items(d: dict[str, Any]) -> str:
+        return ", ".join(f"{n} x{k}" for n, k in sorted(d.items())) if d else "empty"
+    lines = [f"Belt line through ({r['start']['x']}, {r['start']['y']}): {r['tiles']} tiles, in the direction items move.",
+             f"Begins: {r['begins']}."]
+    for leg in as_list(r.get("legs")):
+        kind = f" [{leg['kind']}]" if leg.get("kind") else ""
+        span = (f"({leg['from']['x']}, {leg['from']['y']})" if leg["tiles"] == 1 else
+                f"({leg['from']['x']}, {leg['from']['y']}) → ({leg['to']['x']}, {leg['to']['y']})")
+        lines.append(f"  {span}{kind}: moving {leg['moving']}, {leg['tiles']} tile(s); "
+                     f"left lane ({leg['left_side']} side) {items(leg.get('left') or {})} [{leg['fill_left']}% full], "
+                     f"right lane ({leg['right_side']} side) {items(leg.get('right') or {})} [{leg['fill_right']}% full]")
+    lines.append(f"Ends: {r['ends']}.")
+    fed, taken = as_list(r.get("fed_by")), as_list(r.get("taken_by"))
+    lines.append("Fed by: " + ("; ".join(fed) if fed else "nothing (no inserter, drill or side-load drops onto it)") + ".")
+    lines.append("Taken by: " + ("; ".join(taken) if taken else "no inserter picks from it") + ".")
+    lines.append(f"Capacity: {r.get('lane_capacity_per_min')}/min per lane. A full lane holds 4 items per tile; "
+                 "a full but unmoving line is backed up (measure_belt tells flowing from stuck).")
     return "\n".join(lines)
