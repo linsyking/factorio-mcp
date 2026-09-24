@@ -286,7 +286,7 @@ local function extract_all(task, c, e)
 end
 
 local function extract_items(task, c, e)
-  local taken, problems, total = {}, {}, 0
+  local taken, problems, total, full_of = {}, {}, 0, {}
   for _, it in ipairs(task._items) do
     local kept, removed = pull(c, e, false, it.name, it.count)
     total = total + kept
@@ -295,9 +295,16 @@ local function extract_items(task, c, e)
     elseif kept > 0 then
       local why = kept < removed and "my inventory is full" or "that's all it had"
       taken[#taken + 1] = string.format("%d of %d %s (%s)", kept, it.count, it.name, why)
+    elseif removed > 0 then
+      -- the source had it; every piece went straight back (pull's give-back)
+      full_of[#full_of + 1] = it.name
     else
       problems[#problems + 1] = "it has no " .. it.name
     end
+  end
+  if #full_of > 0 then
+    problems[#problems + 1] = "my inventory is full — it has " .. table.concat(full_of, ", ")
+      .. "; make room and run it again"
   end
   if total == 0 then
     return {
@@ -332,10 +339,11 @@ function M.extract.tick(task)
         for _, it in ipairs(task._items) do want[it.name] = true end
       end
       local main = c.get_main_inventory()
-      local got, total = {}, 0
+      local got, total, matched = {}, 0, 0
       for _, g in ipairs(ground) do
         local st = g.valid and g.stack
         if st and st.valid_for_read and (not want or want[st.name]) then
+          matched = matched + 1
           local name, count = st.name, st.count
           local put = main.insert({ name = name, count = count, quality = st.quality })
           if put >= count then g.destroy() elseif put > 0 then st.count = count - put end
@@ -347,6 +355,11 @@ function M.extract.tick(task)
         for name, n in pairs(got) do parts[#parts + 1] = string.format("%d %s", n, name) end
         table.sort(parts)
         return { status = "done", detail = "picked up " .. table.concat(parts, ", ") .. " from the ground" }
+      elseif matched > 0 then
+        -- matching items are lying right there; not one fit
+        return { status = "failed", detail = string.format(
+          "ground items at (%.1f, %.1f) but my inventory is full — make room and run it again",
+          task.target.x, task.target.y) }
       end
     end
   end

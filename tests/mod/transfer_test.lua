@@ -131,5 +131,48 @@ capacity = math.huge
 check(r.status == "done" and belt_count("coal") == 2,
   "belt extract: what the character can't carry goes back on the belt")
 
+-- a FULL pocket (iron's round: the failing extract blamed the belt's
+-- contents instead). The belt has the coal; not one fit — say that.
+belt = make_belt({ { "coal", 3 } }, {})
+capacity = 0
+r = extract({ items = { coal = 2 } })
+capacity = math.huge
+check(r.status == "failed" and r.detail ==
+  "couldn't take anything from the transport-belt — my inventory is full — it has coal; make room and run it again",
+  "belt extract: a full pocket reports itself, not 'it has no coal'")
+check(belt_count("coal") == 3, "belt extract: a full pocket leaves the belt as it was")
+
+-- full pocket and a missing item both reported, each with its true reason
+belt = make_belt({ { "coal", 3 } }, {})
+capacity = 0
+r = extract({ items = { coal = 2, ["iron-plate"] = 1 } })
+capacity = math.huge
+check(r.status == "failed" and r.detail ==
+  "couldn't take anything from the transport-belt — it has no iron-plate; my inventory is full — it has coal; make room and run it again",
+  "belt extract: full pocket and missing item both reported honestly")
+
+-- ground items at the point, pocket full: the honest failure, not
+-- "nothing there to extract from" (the point is near, not inside, the belt)
+do
+  local saved_filter = character.surface.find_entities_filtered
+  local saved_main = character.get_main_inventory
+  character.surface.find_entities_filtered = function(filter)
+    if filter.type == "item-entity" then
+      return { { valid = true, stack = { valid_for_read = true, name = "coal", count = 5, quality = "normal" } } }
+    end
+    return { belt }
+  end
+  character.get_main_inventory = function() return { insert = function() return 0 end } end
+  belt = make_belt({}, {})
+  local task = { type = "extract", target = { x = 12.5, y = 10.5 }, items = { coal = 2 } }
+  transfer.extract.start(task)
+  r = transfer.extract.tick(task)
+  character.surface.find_entities_filtered = saved_filter
+  character.get_main_inventory = saved_main
+  check(r.status == "failed" and r.detail ==
+    "ground items at (12.5, 10.5) but my inventory is full — make room and run it again",
+    "ground extract: a full pocket is reported, not 'nothing to extract from'")
+end
+
 print(failures == 0 and "\nALL TESTS PASSED" or ("\n" .. failures .. " FAILURES"))
 os.exit(failures == 0 and 0 or 1)
