@@ -90,7 +90,7 @@ Claude Code (`.mcp.json` in the project), one entry per agent:
 
 Without a native MCP client, `factorio-mcp call TOOL '{json}' TOOL2 …` runs tool calls through a real MCP client session.
 
-## Tools (54)
+## Tools (55)
 
 | Group | Tools |
 |---|---|
@@ -99,13 +99,15 @@ Without a native MCP client, `factorio-mcp call TOOL '{json}' TOOL2 …` runs to
 | Blueprints | `list_blueprints`, `read_blueprint`, `import_blueprint`, `export_blueprint` (explored area → string), `build_blueprint` (string or carried, up to 1000 entities) |
 | Chat and events | `read_chat`, `get_events`, `wait_for_events` (long-poll), `say`, `set_status` (a line for people watching) |
 | Instant actions | `start_research`, `equip`, `exit_vehicle`, `set_train_schedule`, `respawn` |
-| Jobs | `walk_to`, `drive_to`, `follow_player`, `mine`, `place_entity`, `craft_items`, `insert_items`, `extract_items`, `set_recipe`, `rotate_entity`, `build_plan` (up to 100 steps, `dry_run`), `run_plan` (chained steps, including `wait_until`), `wait_until` (seconds, an item count in an entity or your inventory, or a research), `deconstruct`, `fight`, `defend_area`, `keep_fueled` |
+| Jobs | `walk_to`, `drive_to`, `follow_player`, `mine`, `place_entity`, `craft_items`, `insert_items`, `extract_items`, `pick_up` (ground items within a radius — walking past doesn't pick them up), `set_recipe`, `rotate_entity`, `build_plan` (up to 100 steps, `dry_run`), `run_plan` (chained steps, including `wait_until`), `wait_until` (seconds, an item count in an entity or your inventory, or a research), `deconstruct`, `fight`, `defend_area`, `keep_fueled` |
 | Routing and belt checks | `route_belt`, `route_pipe` (plan on explored ground; `build=true` queues normal build jobs), `trace_belt` (a line's legs, ends, feeders and takers, and each lane's contents and fill %), `measure_belt` (items/min passing a tile, per lane, against capacity; flowing, backed up or empty) |
 | Job control | `job_status`, `job_wait`, `job_cancel` |
 
 Other conventions:
 - Items of non-normal quality are written `name@quality`.
 - Directions are 16-way: 0 = N, 4 = E, 8 = S, 12 = W.
+- Every tool result carries an `ALERTS:` line when the force's warning counts changed since that character's last call (e.g. `ALERTS: no-power 38 (+38 since your last call)`); steady state is silent, so any call — walk, scan, placement — surfaces a new problem immediately (mod 0.2.19+; silent against older mods). Not to be confused with the `alerts` tool (the game's alert panel): this line is map_warnings deltas; `map_warnings` gives the full punch list with positions.
+- The client advertises only tools the live server's mod can run (`pick_up` needs 0.2.18+, held back against older mods with an honest version error instead of the mod's `unknown task type`).
 - The wire protocol is in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 - A comparison with the other Factorio MCPs is in [research/factorio-agent/11-comparison.md](../research/factorio-agent/11-comparison.md).
 

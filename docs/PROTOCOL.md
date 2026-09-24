@@ -20,9 +20,16 @@ Every call is one RCON command:
 ```jsonc
 { "ok": true, "data": { ... } }
 { "ok": false, "error": "human-readable message" }     // Lua file:line prefixes are stripped
+{ "ok": true, "data": { ... }, "alerts": "ALERTS: no-power 38 (+38 since your last call)" }  // optional, 0.2.19+
 ```
 
 **Chunking:** a reply over 3400 bytes is stored mod-side, and the first part comes back as `{ok, chunked: true, id, parts, data}`. The server then fetches parts 2..N with `get_chunk {id, part}`. Stored parts expire after 5 minutes.
+
+### Ambient alerts (0.2.19+)
+
+Every scoped response — success or error — except `heartbeat` carries an optional `alerts` string: a one-line digest of the character's force warning counts (the `map_warnings` classification), delta-based against that character's last-seen counts per surface (`storage.alert_seen`). Steady state carries nothing; the first-ever response on a surface is a silent baseline. `heartbeat` is exempt so the 20-second keepalive never consumes a delta the agent hasn't been shown yet. The counts themselves are shared and cached mod-side for 30 ticks. The client appends the line to every tool result (every tool, inbox or not, and to tool errors), turning any call — walk, scan, placement — into an alert surface. Against mods < 0.2.19 the field is absent and the client stays silent.
+
+**Tool gating (client, 0.2.19+):** the MCP server holds back tools whose `TOOL_MIN_MOD` entry exceeds the live server's mod version (learned at bind, or probed characterless via `ping` when tools are listed before a bind; unknown version → everything advertised, as before). A gated tool called anyway fails with an honest version message instead of the mod's `unknown task type` (which now names the running mod version).
 
 ## Scoping and binding
 

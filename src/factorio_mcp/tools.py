@@ -126,6 +126,28 @@ def _tool_errors(fn):
 # Tools that already return chat, or run before a binding exists.
 NO_INBOX = {"read_chat", "wait_for_events", "status"}
 
+# Tools that need a minimum mod version on the game server, so the client
+# never advertises (or runs) a tool the live mod would reject with "unknown
+# task type" — the pick_up skew: a 0.2.18-aware client advertised it against
+# the still-live 0.2.17 mod. Checked against Game.mod_version (set at bind,
+# or probed characterless when tools are listed before a bind).
+TOOL_MIN_MOD: dict[str, tuple[int, ...]] = {
+    "pick_up": (0, 2, 18),  # introduced in mod 0.2.18
+}
+
+
+def fmt_version(v: tuple[int, ...]) -> str:
+    return ".".join(map(str, v))
+
+
+def gated_tools(names: list[str] | tuple[str, ...], mod_version: tuple[int, ...] | None) -> list[str]:
+    """The tool names too new for the live mod. Unknown version -> nothing
+    gated: without information the client advertises everything (a call then
+    fails with the honest version error, or the game is simply down)."""
+    if mod_version is None:
+        return []
+    return sorted(n for n in names if n in TOOL_MIN_MOD and TOOL_MIN_MOD[n] > mod_version)
+
 
 def register(app: MCPServer, game: Game) -> None:
     async def inbox() -> str:
@@ -151,6 +173,28 @@ def register(app: MCPServer, game: Game) -> None:
             out += f"\n\nNew chat{more}:\n" + chat_lines(msgs[-20:])
         return out
 
+    def alert_suffix() -> str:
+        """The mod's ambient ALERTS lines from the calls this tool made: a
+        one-line digest of the force's warning counts when they changed since
+        this character's last call (mod 0.2.19+; nothing against older mods,
+        and steady state is silent by design)."""
+        lines = game.drain_alerts()
+        return ("\n\n" + "\n".join(lines)) if lines else ""
+
+    def with_alerts(fn):
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            try:
+                out = await fn(*args, **kwargs)
+            except ToolError as e:
+                msg = str(e) + alert_suffix()
+                raise ToolError(msg) from e
+            if not isinstance(out, str):
+                return out
+            return out + alert_suffix()
+
+        return wrapper
+
     def with_inbox(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
@@ -170,6 +214,7 @@ def register(app: MCPServer, game: Game) -> None:
     def tool(description: str):
         def deco(fn):
             wrapped = _tool_errors(fn)
+            wrapped = with_alerts(wrapped)  # every tool surfaces ALERTS, inbox or not
             if game.cfg.inbox and fn.__name__ not in NO_INBOX:
                 wrapped = with_inbox(wrapped)
             app.tool(name=fn.__name__, description=description)(wrapped)

@@ -13,6 +13,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from . import tools
 from .bridge import ModError
 from .game import Config, Game
+from .tools import TOOL_MIN_MOD, fmt_version, gated_tools
 
 INSTRUCTIONS = """\
 You control ONE Factorio character, named "{character}". Every tool acts as that character.
@@ -34,6 +35,9 @@ Model of the world:
 - Every tool result ends with what happened since your previous call: your jobs that finished or failed, and events.
   It also lists game chat you haven't seen yet ("New chat:"), from players and other agents. Each line is shown once;
   read_chat and get_events re-read older lines with since_id.
+- When your force's warning counts change anywhere (machines losing power or fuel, dead drills, backed-up outputs...),
+  your next tool result carries an ALERTS line, e.g. "ALERTS: no-power 38 (+38 since your last call)" — steady state
+  prints nothing. map_warnings gives the full punch list with positions.
 - Your character follows normal player mechanics: walking speed, hand-mining and crafting time, reach and build range,
   items come from and go to its own inventory, placement rules. Nothing is created from nothing.
 - Fog of war: you only perceive explored ground (chunks your character or your force has seen). Unexplored tiles
@@ -45,9 +49,40 @@ Model of the world:
 
 class StrictMCPServer(MCPServer):
     """Rejects unknown tool arguments. The SDK drops them silently, so a call
-    like scan_area {"center": {...}} ran centred on the character."""
+    like scan_area {"center": {...}} ran centred on the character.
+    Also gates tools on the live server's mod version: never advertise or run
+    a tool the mod will reject (the pick_up skew class)."""
+
+    def __init__(self, *args, game: Game | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._game = game
+
+    async def list_tools(self):
+        listed = await super().list_tools()
+        game = self._game
+        if game is None or not listed:
+            return listed
+        if game.mod_version is None:
+            await game.probe_mod_version()  # one characterless ping; throttled
+        hidden = gated_tools([t.name for t in listed], game.mod_version)
+        if hidden:
+            print(f"[factorio-mcp] not advertising {', '.join(hidden)} (needs a newer mod than the live "
+                  f"{fmt_version(game.mod_version)})", file=sys.stderr)
+            return [t for t in listed if t.name not in set(hidden)]
+        return listed
 
     async def call_tool(self, name, arguments, context=None):
+        need = TOOL_MIN_MOD.get(name)
+        if need and self._game is not None:
+            v = self._game.mod_version
+            if v is None:
+                v = await self._game.probe_mod_version()
+            if v is not None and need > v:
+                raise ToolError(
+                    f"{name} needs mod {fmt_version(need)}+; the live game server runs factorio-mcp "
+                    f"{fmt_version(v)} (deployed before this tool existed). Ask the coordinator to update the "
+                    f"server mod — until then use another way to do this."
+                )
         tool = self._tool_manager.get_tool(name)
         if tool is not None and arguments:
             known = set((tool.parameters or {}).get("properties", {}))
@@ -85,6 +120,7 @@ def build_app(cfg: Config) -> MCPServer:
         version="0.1.0",
         instructions=INSTRUCTIONS.format(character=cfg.character, wait=cfg.default_wait_s),
         lifespan=lifespan,
+        game=game,
     )
     tools.register(app, game)
     return app

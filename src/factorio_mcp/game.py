@@ -11,7 +11,9 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +25,16 @@ from .rcon import RconClient
 log = logging.getLogger("factorio_mcp")
 
 HEARTBEAT_S = 20.0
+
+_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+
+def parse_version(v: Any) -> tuple[int, ...] | None:
+    """'0.2.19' -> (0, 2, 19); anything unparsable -> None."""
+    if not isinstance(v, str):
+        return None
+    m = _VERSION_RE.search(v)
+    return tuple(int(x) for x in m.groups()) if m else None
 
 
 @dataclass
@@ -47,6 +59,8 @@ class Game:
         self._lock = asyncio.Lock()
         self._queue: str | None = None
         self._notice: str | None = None
+        self._mod_version: tuple[int, ...] | None = None
+        self._probe_at: float | None = None  # last version-probe attempt (monotonic)
         self._bridge.rebind = self._rebind
 
     # The job queue: every job this character is given joins one chain, so a
@@ -158,6 +172,41 @@ class Game:
         return self.cfg.character
 
     @property
+    def mod_version(self) -> tuple[int, ...] | None:
+        """The live game server's factorio-mcp version, as of the last bind
+        (or probe). None when not known yet — callers must treat that as 'no
+        information', never as 'old' or 'new'."""
+        return self._mod_version
+
+    async def probe_mod_version(self) -> tuple[int, ...] | None:
+        """Learn the server's mod version without binding a character: one
+        unscoped ping on a short-lived connection. Throttled to one attempt
+        per 30s so listing tools against a down server never stalls. Powers
+        the tool gating (never advertise a tool the live mod will reject)."""
+        if self._mod_version is not None:
+            return self._mod_version
+        now = time.monotonic()
+        if self._probe_at is not None and now - self._probe_at < 30.0:
+            return None
+        self._probe_at = now
+        rcon = RconClient(self.cfg.host, self.cfg.port, self.cfg.password, 2.0)
+        try:
+            ping = await Bridge(rcon, self.cfg.character).unlock()
+            self._mod_version = parse_version(ping.get("mod_version"))
+            if self._mod_version is not None:
+                log.info("game server runs factorio-mcp %s", ".".join(map(str, self._mod_version)))
+        except Exception:
+            pass  # unreachable/unknown: callers fall back to advertising everything
+        finally:
+            rcon.close()
+        return self._mod_version
+
+    def drain_alerts(self) -> list[str]:
+        """The ALERTS lines the mod attached to this character's calls since
+        the last drain (empty against mods older than 0.2.19)."""
+        return self._bridge.drain_alerts()
+
+    @property
     def bound_info(self) -> dict[str, Any] | None:
         return self._bound
 
@@ -175,6 +224,7 @@ class Game:
                         f"'{self.cfg.character}': {e}"
                     ) from e
                 body = self._bound["body"]
+                self._mod_version = parse_version(self._bound["ping"].get("mod_version"))
                 await self._check_restart(int(self._bound["ping"].get("tick") or 0))
                 log.info(
                     "bound character %s at (%.1f, %.1f)%s",

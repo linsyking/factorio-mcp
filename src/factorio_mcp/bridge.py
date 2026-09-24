@@ -74,6 +74,15 @@ class Bridge:
         # Set by Game: re-bind after the binding was lost (taken over, lease
         # expired, the other session ended). Scoped calls then retry once.
         self.rebind: Callable[[], Awaitable[None]] | None = None
+        # Ambient alerts (mod 0.2.19+): one-line warning digests the mod
+        # attaches to scoped responses. Collected here, drained by the tools
+        # layer so every tool result ends with them; empty against older mods.
+        self.pending_alerts: list[str] = []
+
+    def drain_alerts(self) -> list[str]:
+        """Takes the ALERTS lines collected since the last drain."""
+        lines, self.pending_alerts = self.pending_alerts, []
+        return lines
 
     # ------------------------------------------------------------ transport
 
@@ -114,6 +123,8 @@ class Bridge:
                 chunk = await self.call("get_chunk", {"id": env["id"], "part": part})
                 assembled += chunk["data"]
             env = parse_envelope(assembled)
+        if method not in UNSCOPED and env.get("alerts"):
+            self.pending_alerts.append(str(env["alerts"]))
         if not env.get("ok"):
             err = str(env.get("error") or "unknown mod error")
             # The binding check runs before the handler, so nothing happened:

@@ -159,7 +159,13 @@ end
 function M.enqueue(params)
   local task = params.task
   if type(task) ~= "table" or not runners[task.type] then
-    error("unknown task type: " .. tostring(type(task) == "table" and task.type or task))
+    -- Name the running mod version: the skew class is a client that knows a
+    -- task this older mod has never heard of, and "unknown task type" alone
+    -- reads like a typo instead of a version gap.
+    local ok, v = pcall(function() return script.active_mods["factorio-mcp"] end)
+    error("unknown task type: " .. tostring(type(task) == "table" and task.type or task)
+      .. " — this server runs factorio-mcp " .. (ok and v or "?")
+      .. "; the task may need a newer mod (the client gates tools on this version)")
   end
   local name = companion.context()
   companion.require_companion(name)

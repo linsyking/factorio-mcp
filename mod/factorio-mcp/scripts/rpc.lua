@@ -9,6 +9,7 @@
 -- companion.bind). The binding check is a safety mechanism against two MCP
 -- instances driving one character — not coordination policy.
 local companion = require("scripts.companion")
+local alerts = require("scripts.alerts")
 
 local M = {}
 
@@ -70,18 +71,39 @@ function M.dispatch(method, params_json)
     end
     params = decoded
   end
+  -- Ambient alerts (see scripts/alerts.lua): every scoped response except
+  -- heartbeat carries the one-line digest of what changed in the force's
+  -- warning counts. heartbeat is a transport keepalive the agent never
+  -- sees — and updating the delta baseline there would silently swallow the
+  -- very alerts this exists to surface.
+  local alert_line
+  local scoped = not UNSCOPED[method] and method ~= "heartbeat"
   local ok, result = pcall(function()
     if not UNSCOPED[method] then
       companion.touch(params.companion, params.session)
       companion.set_context(params.companion)
     end
-    return handler(params)
+    local r = handler(params)
+    if scoped then
+      alert_line = alerts.line(params.companion)
+    end
+    return r
   end)
   companion.set_context(nil)
   if ok then
-    respond({ ok = true, data = result or {} }, method == "get_chunk")
+    local env = { ok = true, data = result or {} }
+    if alert_line then env.alerts = alert_line end
+    respond(env, method == "get_chunk")
   else
-    respond({ ok = false, error = M.clean_error(result) })
+    local env = { ok = false, error = M.clean_error(result) }
+    if scoped then
+      pcall(function()
+        companion.set_context(params.companion)
+        alert_line = alerts.line(params.companion)
+      end)
+      if alert_line then env.alerts = alert_line end
+    end
+    respond(env)
   end
 end
 
