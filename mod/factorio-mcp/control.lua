@@ -126,10 +126,9 @@ script.on_event(defines.events.on_runtime_mod_setting_changed, function(e)
 end)
 follow.register_commands()
 script.on_event(defines.events.on_script_path_request_finished, walk.on_path_finished)
--- damage/death handlers are force-filtered ("player"): characters get the
--- personal event, other force entities the aggregated combat feed
-script.on_event(defines.events.on_entity_damaged, events.on_entity_damaged,
-  { { filter = "force", force = "player" } })
-script.on_event(defines.events.on_entity_died, events.on_entity_died,
-  { { filter = "force", force = "player" } })
+-- damage/death handlers check the force inside (2.0 has no "force" event
+-- filter preset — it killed control.lua at load): characters get the
+-- personal event, other player-force entities the aggregated combat feed
+script.on_event(defines.events.on_entity_damaged, events.on_entity_damaged)
+script.on_event(defines.events.on_entity_died, events.on_entity_died)
 script.on_event(defines.events.on_research_finished, events.on_research_finished)
