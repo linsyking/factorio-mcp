@@ -41,8 +41,17 @@ local chest = { valid = true, name = "iron-chest", type = "container", position 
 
 local e = approach.pick_entity({ chest, a }, { x = 80.6, y = -10.9 })
 check(e == a, "pick: the entity whose footprint contains the point wins over a nearer centre")
-local e2, note = approach.pick_entity({ a, b }, { x = 80, y = -9 })
-check(e2 ~= nil and note and note:find("edge between", 1, true), "pick: a point on a shared edge is flagged")
+-- the report's case: (80,-11) and (80,-9) both resolved to the furnace at (80,-10)
+check(approach.pick_entity({ a, b }, { x = 80, y = -11 }) == a and approach.pick_entity({ a, b }, { x = 80, y = -9 }) == b,
+  "pick: whole-number points name their tile, so (80,-11) and (80,-9) resolve to different furnaces")
+-- a tie the tile can't settle (the named tile is empty) is still flagged
+local c1 = { valid = true, name = "iron-chest", type = "container", position = { x = 20.5, y = 25.5 },
+  bounding_box = { left_top = { x = 20, y = 25 }, right_bottom = { x = 21, y = 26 } } }
+local i1 = { valid = true, name = "inserter", type = "inserter", position = { x = 21.5, y = 25.5 },
+  bounding_box = { left_top = { x = 21, y = 25 }, right_bottom = { x = 22, y = 26 } } }
+local e2, note = approach.pick_entity({ c1, i1 }, { x = 21, y = 26 })
+check(e2 ~= nil and note and note:find("edge between", 1, true), "pick: a corner shared by two entities, with the named tile empty, is flagged")
+check(approach.pick_entity({ c1, i1 }, { x = 21, y = 25 }) == i1, "pick: (21,25) names the inserter's tile")
 local e3, note3 = approach.pick_entity({ a, b }, { x = 80.5, y = -8.5 })
 check(e3 == b and note3 == nil, "pick: a point inside one building resolves to it, no note")
 

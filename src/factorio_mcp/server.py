@@ -25,6 +25,8 @@ Model of the world:
   {wait:g}) before returning the job id, so you can queue many steps ahead without waiting. If a job fails, every job
   queued after it is cancelled and you are told on your next call; queue again from there. job_status, job_wait and
   job_cancel manage jobs. Other agents' characters act in parallel with their own jobs.
+- Query tools (look_around, check_inventory, inspect_entity, ...) show the game now, not after your queued jobs
+  have run; use wait_until / job_wait to look after them.
 - Every tool result ends with what happened since your previous call: your jobs that finished or failed, and events.
   It also lists game chat you haven't seen yet ("New chat:"), from players and other agents. Each line is shown once;
   read_chat and get_events re-read older lines with since_id.

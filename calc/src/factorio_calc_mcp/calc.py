@@ -110,6 +110,11 @@ def solve_production(
     if not targets_per_min:
         raise ValueError("give at least one target item with a rate per minute")
     _game(game)
+    # The solver never picks the rocket silo (a fixed-recipe machine), so rocket
+    # parts are counted directly and their ingredients solved as usual.
+    if "rocket-part" in targets_per_min:
+        return _with_rocket_parts(targets_per_min, machines=machines, preset=preset, recipes=recipes,
+                                  raw_inputs=raw_inputs, game=game, fuel=fuel)
     preset_name = PRESETS.get(preset)
     if preset_name is None:
         raise ValueError(f"preset must be one of {', '.join(PRESETS)}")
@@ -152,6 +157,11 @@ def solve_production(
 
     plan = Plan(notes=notes)
     factory = res.factory
+    if factory is None:
+        raise ValueError(
+            f"the solver found no way to make {', '.join(targets_per_min)} "
+            f"({getattr(res, 'solveRes', 'unsolved')}): a machine for one of the recipes may be missing from the "
+            "preset — pass machines=[...] (e.g. 'chemical-plant', 'oil-refinery') or recipes=[...]")
     for mul in factory.inner:
         machine = mul.machine
         recipe = getattr(machine, "recipe", None)
@@ -251,3 +261,32 @@ def recipe_info(name: str, game: str = "base") -> dict[str, Any]:
         "products": parts(r.outputs),
         "category": _dashed(getattr(getattr(r, "category", None), "name", getattr(r, "category", ""))),
     }
+
+
+def _with_rocket_parts(targets_per_min: dict[str, float], **kw) -> Plan:
+    """rocket-part at rate R: R / (silo rate) rocket silos, plus a plan for the
+    silo's ingredients (and the other targets)."""
+    rate = float(targets_per_min["rocket-part"])
+    silo = mch.RocketSilo(rcp.rocket_part)
+    per_silo = {_dashed(f.item): float(f.rate()) * 60 for f in silo.flows()}  # per minute; inputs negative
+    silos = rate / per_silo["rocket-part"]
+    rest = {k: v for k, v in targets_per_min.items() if k != "rocket-part"}
+    for name, r in per_silo.items():
+        if name not in ("rocket-part", "electricity") and r < 0:
+            rest[name] = rest.get(name, 0.0) + (-r) * silos
+    plan = solve_production(rest, **kw) if rest else Plan()
+    plan.machines.insert(0, {"recipe": "rocket-part", "machine": "rocket-silo", "count": _num(silos),
+                             "count_rounded_up": math.ceil(silos - 1e-9)})
+    for name in ("processing-unit", "low-density-structure", "rocket-fuel"):
+        need = -per_silo.get(name, 0.0) * silos
+        if need > 0 and name in plan.outputs:  # made by the plan, consumed by the silos
+            left = round(plan.outputs[name] - need, 3)
+            if left > 1e-6 and name in targets_per_min:
+                plan.outputs[name] = left
+            else:
+                plan.outputs.pop(name)
+    plan.outputs["rocket-part"] = round(rate, 3)
+    plan.electricity_mw = round((plan.electricity_mw or 0) - per_silo.get("electricity", 0.0) / 60 * silos, 4)
+    plan.notes.append(f"rocket-part: {_num(silos)} rocket silo(s) at {round(per_silo['rocket-part'], 3)}/min each "
+                      "(the silo is counted directly; its ingredients are solved below)")
+    return plan

@@ -290,6 +290,9 @@ function M.bind(params)
     end
     took_over = true
   end
+  -- The body first: if spawning fails (character limit, no free spot), no
+  -- binding is left behind for a character without a body.
+  local body = spawn_body(name)
   bindings()[name] = { session = session, last_seen = game.tick, since = game.tick }
   -- A brand-new character starts reading chat/events from "now".
   storage.cursors = storage.cursors or {}
@@ -299,7 +302,6 @@ function M.bind(params)
       events = (storage.events and storage.events.next_id or 1) - 1,
     }
   end
-  local body = spawn_body(name)
   pcall(function() vision.mark(M.get(name)) end)
   body.bound = true
   body.took_over = took_over

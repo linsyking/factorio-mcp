@@ -99,4 +99,34 @@ function M.tick(task)
   }
 end
 
+-- Cancel everything in the character's crafting queue (last first, so queue
+-- indices stay valid); the engine refunds the ingredients. Returns how many
+-- crafts were cancelled. Jobs run one at a time, so while a craft (or a
+-- build_plan preparing items) is the active job, the queue is all its own.
+function M.cancel_queue(c)
+  local n = 0
+  for _ = 1, 1000 do
+    if not c or c.crafting_queue_size == 0 then break end
+    -- refunds that don't fit would be spilled by the engine (onto belts,
+    -- if any are near): stop while the inventory is nearly full and let the
+    -- remaining crafts finish instead
+    local inv = c.get_main_inventory()
+    if inv and inv.count_empty_stacks() < 2 then break end
+    local q = c.crafting_queue
+    local last = q and q[#q]
+    if not last then break end
+    local ok = pcall(function() c.cancel_crafting({ index = last.index, count = last.count }) end)
+    if not ok then break end
+    n = n + last.count
+  end
+  return n
+end
+
+-- Called by tasks.lua when an active craft job is cancelled or fails: the
+-- engine would otherwise keep crafting (the full batch's ingredients were
+-- taken when crafting began), which looked like lost ingredients.
+function M.stop(task)
+  if task._craft then M.cancel_queue(companion.get()) end
+end
+
 return M

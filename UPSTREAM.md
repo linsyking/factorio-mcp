@@ -45,6 +45,17 @@ factorio-mcp is a fork of **[matteomekhail/Agentic-Factorio](https://github.com/
 - **Optional jobs, stop-on-failure batches, per-step `run_plan` results, strict tool arguments.**
 - **Engine mining:** hand-mining uses the engine's own mining (selected entity + `mining_state`). The character shows the mining animation, and timing and production statistics are vanilla. A script timer is the fallback when the engine can't be pointed at exactly the target.
 
+## Fixed from the campaign bug report (mod 0.2.11; see ../BUGS.md, "Maintainer response")
+
+- Overflow items (from recipe changes and equipment swaps) are dropped on the ground, never onto belts. This was the source of the "plates from nowhere".
+- Cancelling or failing a craft job, or a build_plan still crafting, cancels its crafts in the engine queue and refunds the ingredients.
+- Entity picking: a whole-number point names its tile. `wait_until` counts every inventory.
+- `route_belt through_inserters`; detour and occupied-start messages.
+- `insert_items` onto belts; `extract_items {all}` empties every inventory; `mine {x, y, count}`; `mine` on buildings points to `deconstruct`.
+- A queued `say`; `wait_until optional`; CLI batches stop on a footer failure only after queueing jobs.
+- Scan rows are labelled with y, with an x ruler. Blocker names in placement failures. `bind` spawns the body before recording the binding.
+- calc: rocket-part through the rocket silo.
+
 ## Fixed: walker hangs under load (mod 0.2.10, from an agent's report)
 
 - **The pathfinder's answer is waited for; it always comes.** The engine answers every `request_path` exactly once (`on_script_path_request_finished`: a path, no path, or "try again later"), however long it takes. The walker used to give up after 1.5 s and walk blindly; under a six-character load valid paths hadn't arrived yet, and late answers were dropped.

@@ -170,9 +170,9 @@ def check_plan(plan: list[Placed], ctx: dict[str, Any]) -> tuple[list[str], list
             warnings.append(f"{p.item} at ({p.x}, {p.y}) picks up from an empty tile and drops into {dst}: "
                             f"probably facing the wrong way (direction = the side it picks up from)")
         elif src_new is not None and src_new.kind == "container":
-            warnings.append(f"{p.item} at ({p.x}, {p.y}) picks up from the {src} placed in this same plan, which "
-                            f"starts empty, and drops into {dst}: probably facing the wrong way "
-                            f"(direction = the side it picks up from)")
+            warnings.append(f"{p.item} at ({p.x}, {p.y}) picks up from the {src} placed in this same plan (empty "
+                            f"for now) and drops into {dst} — fine if you'll fill that {src}; otherwise it faces the "
+                            f"wrong way (direction = the side it picks up from)")
         elif dst in ("nothing", "unexplored"):
             warnings.append(f"{p.item} at ({p.x}, {p.y}) drops onto an empty tile (picks from {src})")
     return warnings, lines

@@ -3,6 +3,7 @@
 -- old item back into the main inventory; ammo tops up the slot paired with
 -- the equipped gun (gun slot i shoots from ammo slot i).
 local companion = require("scripts.companion")
+local items = require("scripts.items")
 
 local M = {}
 
@@ -12,11 +13,7 @@ local TYPE_PHRASE = { gun = "a gun", ammo = "ammo", armor = "armor" }
 local function give_back(c, main, name, count)
   local inserted = main.insert({ name = name, count = count })
   if inserted < count then
-    pcall(c.surface.spill_item_stack, {
-      position = c.position,
-      stack = { name = name, count = count - inserted },
-      force = c.force,
-    })
+    items.give(c, { name = name, count = count - inserted }) -- on the ground, never onto a belt
   end
 end
 

@@ -50,3 +50,14 @@ def test_works_in_a_fresh_context():
 
     plan = contextvars.Context().run(calc.solve_production, {"iron-plate": 60})
     assert by_recipe(plan)["iron-plate"] == pytest.approx(3.2)
+
+
+def test_rocket_part_uses_a_rocket_silo():
+    # used to crash: "'NoneType' object has no attribute 'inner'" (the solver never picks the silo)
+    p = calc.solve_production({"rocket-part": 1}, game="space-age", preset="late")
+    silo = p.machines[0]
+    assert silo["machine"] == "rocket-silo" and silo["count"] == 0.05
+    assert p.outputs == {"rocket-part": 1.0}
+    base = calc.solve_production({"rocket-part": 1}, preset="late")
+    pu = next(m for m in base.machines if m["recipe"] == "processing-unit")
+    assert pu["count"] > 1  # base needs 10 processing units per part, Space Age 1

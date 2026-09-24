@@ -127,6 +127,19 @@ function M.pick_entity(candidates, pos, accept)
       end
     end
   end
+  -- A tie on a shared edge or corner: a point like (21, 26) names the tile
+  -- (21, 26), as it does for placement, so the entity covering that tile's
+  -- centre wins when there is exactly one.
+  if inside and rival then
+    local tile_pos = { x = math.floor(pos.x) + 0.5, y = math.floor(pos.y) + 0.5 }
+    local hits = {}
+    for _, e in ipairs(candidates) do
+      if e.valid and (not accept or accept(e)) and covers(e, tile_pos) then hits[#hits + 1] = e end
+    end
+    if #hits == 1 then
+      inside, rival = hits[1], nil
+    end
+  end
   local note
   if inside and rival then
     note = string.format("(%.1f, %.1f) is on the edge between the %s at (%.1f, %.1f) and the %s at (%.1f, %.1f); "

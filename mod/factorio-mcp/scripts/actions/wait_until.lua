@@ -73,7 +73,17 @@ function M.tick(task)
     local have = 0
     if task.at then
       local e = approach.find_entity_near(c, task.at)
-      if e then pcall(function() have = e.get_item_count(items.parse(tostring(task.item))) end) end
+      if e then
+        -- every inventory: a furnace's output, an assembler's result, a chest…
+        local name = items.parse(tostring(task.item))
+        pcall(function()
+          for i = 1, e.get_max_inventory_index() do
+            local inv = e.get_inventory(i)
+            if inv then have = have + inv.get_item_count(name) end
+          end
+        end)
+        task._watched = e.name
+      end
     else
       have = items.count(c, tostring(task.item))
     end
@@ -84,7 +94,8 @@ function M.tick(task)
   end
 
   if game.tick >= task._deadline then
-    local extra = task._have and string.format(" (had %d)", task._have) or ""
+    local extra = task._have and string.format(" (had %d%s)", task._have,
+      task._watched and (" in the " .. task._watched) or "") or ""
     return { status = "failed", detail = "timed out waiting for " .. describe(task) .. extra }
   end
   return nil

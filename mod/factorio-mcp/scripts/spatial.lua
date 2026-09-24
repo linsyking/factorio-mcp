@@ -305,8 +305,7 @@ function M.scan_area(params)
     grid = grid,
     legend = legend,
     inserters = inserters,
-    note = "tile at grid[row][col] = map (origin.x+col, origin.y+row); rows run north to south."
-      .. " Your force's buildings cover their whole footprint; other entities mark their center tile."
+    note = "Your force's buildings cover their whole footprint; other entities mark their center tile."
       .. " Letters stay the same across scans and for every agent of your force.",
   }
 end

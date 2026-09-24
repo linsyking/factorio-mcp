@@ -57,6 +57,33 @@ end
 
 M.insert = {}
 
+-- Belts take items the way a player drops them on (one at a time onto a
+-- lane, as long as there is room); LuaEntity.insert refuses belts.
+local BELTS = { ["transport-belt"] = true, ["underground-belt"] = true, splitter = true }
+
+local function belt_insert(e, spec)
+  local n = 0
+  pcall(function()
+    local max_i = 2
+    pcall(function() max_i = e.get_max_transport_line_index() end)
+    for i = 1, max_i do
+      local line = e.get_transport_line(i)
+      while n < spec.count and line.can_insert_at_back() do
+        if not line.insert_at_back({ name = spec.name, count = 1, quality = spec.quality }) then break end
+        n = n + 1
+      end
+      if n >= spec.count then break end
+    end
+  end)
+  return n
+end
+
+local function entity_insert(e, spec)
+  if BELTS[e.type] then return belt_insert(e, spec) end
+  return e.insert(spec)
+end
+M.entity_insert = entity_insert
+
 function M.insert.start(task)
   companion.require_companion()
   validate_target(task, "insert")
@@ -81,7 +108,7 @@ function M.insert.tick(task)
     local n = math.min(it.count, have)
     local inserted = 0
     if n > 0 then
-      inserted = e.insert(items.spec(it.name, n))
+      inserted = entity_insert(e, items.spec(it.name, n))
       if inserted > 0 then
         c.remove_item(items.spec(it.name, inserted))
       end
@@ -141,35 +168,59 @@ local function pull(c, source, is_inventory, key, count)
   if removed == 0 then return 0, 0 end
   local kept = c.insert(items.spec(key, removed))
   if kept < removed then
-    source.insert(items.spec(key, removed - kept))
+    -- give back what didn't fit (belts refuse LuaEntity.insert: use their lanes)
+    if is_inventory then
+      source.insert(items.spec(key, removed - kept))
+    else
+      entity_insert(source, items.spec(key, removed - kept))
+    end
   end
   return kept, removed
 end
 
-local function extract_all(task, c, e)
-  local inv = e.get_output_inventory() or e.get_inventory(defines.inventory.chest)
-  if not inv then
-    return {
-      status = "failed",
-      detail = "the " .. e.name .. " has no output inventory I can empty",
-    }
-  end
-  local sums = items.inventory_map(inv)
-  if next(sums) == nil then
-    return { status = "failed", detail = "the " .. e.name .. " is empty — nothing to take" }
-  end
-
-  local taken, total = {}, 0
-  for name, count in pairs(sums) do
-    local kept = pull(c, inv, true, name, count)
-    if kept > 0 then
-      taken[#taken + 1] = string.format("%d %s", kept, name)
-      total = total + kept
+-- Every inventory of the entity except module slots: output, chest, fuel,
+-- burnt fuel, input (a player's "take all" empties a furnace's fuel too).
+local function all_inventories(e)
+  local out = {}
+  pcall(function()
+    for i = 1, e.get_max_inventory_index() do
+      local inv = e.get_inventory(i)
+      local nm = ""
+      pcall(function() nm = inv and inv.name or "" end)
+      if inv and not tostring(nm):find("module") then out[#out + 1] = inv end
     end
+  end)
+  if #out == 0 then
+    local inv = e.get_output_inventory() or e.get_inventory(defines.inventory.chest)
+    if inv then out[1] = inv end
+  end
+  return out
+end
+
+local function extract_all(task, c, e)
+  local invs = all_inventories(e)
+  if #invs == 0 then
+    return { status = "failed", detail = "the " .. e.name .. " has no inventory I can empty" }
+  end
+  local taken_by, total, anything = {}, 0, false
+  for _, inv in ipairs(invs) do
+    for name, count in pairs(items.inventory_map(inv)) do
+      anything = true
+      local kept = pull(c, inv, true, name, count)
+      if kept > 0 then
+        taken_by[name] = (taken_by[name] or 0) + kept
+        total = total + kept
+      end
+    end
+  end
+  if not anything then
+    return { status = "failed", detail = "the " .. e.name .. " is empty — nothing to take" }
   end
   if total == 0 then
     return { status = "failed", detail = "couldn't take anything from the " .. e.name .. " — my inventory is full" }
   end
+  local taken = {}
+  for name, n in pairs(taken_by) do taken[#taken + 1] = string.format("%d %s", n, name) end
   table.sort(taken)
   return {
     status = "done",

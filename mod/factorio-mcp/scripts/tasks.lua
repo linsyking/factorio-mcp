@@ -44,6 +44,7 @@ local runners = {
   deconstruct = deconstruct,
   fight = fight,
   wait_until = require("scripts.actions.wait_until"),
+  say = require("scripts.actions.say"),
 }
 
 -- One lane (queue + active) per companion; tasks in different lanes run in
@@ -82,6 +83,11 @@ end
 
 local function finish(task, status, detail)
   if task._pick_note then detail = (detail or "") .. " — NOTE: " .. task._pick_note end
+  -- a job that ends early undoes its engine-side work (e.g. queued crafts)
+  if status ~= "done" then
+    local r = runners[task.type]
+    if r and r.stop then pcall(r.stop, task) end
+  end
   record(task, status, detail)
   local l = lane(task.companion or companion.DEFAULT)
   if l.active and l.active.id == task.id then

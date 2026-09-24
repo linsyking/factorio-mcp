@@ -40,4 +40,24 @@ function M.count(owner, key)
   return owner.get_item_count({ name = name, quality = quality })
 end
 
+-- Give a stack to a character; what doesn't fit is dropped on the ground
+-- next to it — never onto a belt (spill_item_stack's allow_belts defaults to
+-- true, which put stray items on nearby belts), and left for pickup. Returns
+-- how many were dropped.
+function M.give(c, stack)
+  local kept = c.insert(stack)
+  local left = (stack.count or 0) - kept
+  if left > 0 then
+    local ok = pcall(c.surface.spill_item_stack, {
+      position = c.position,
+      stack = { name = stack.name, count = left, quality = stack.quality },
+      force = c.force,
+      enable_looted = true,
+      allow_belts = false,
+    })
+    if not ok then return 0 end
+  end
+  return math.max(left, 0)
+end
+
 return M

@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import os
 import sys
 import zipfile
@@ -82,22 +83,35 @@ async def _call(cfg: Config, calls: list[tuple[str, dict]]) -> int:
     async with transport as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
+            queued_here = False  # has this batch queued a job yet?
             for i, (name, arguments) in enumerate(calls):
+                if name == "tools":
+                    print("=== tools [ERROR]\n'tools' is a factorio-mcp subcommand, not a tool: run `factorio-mcp tools`.")
+                    rc = 1
+                    break
                 result = await session.call_tool(name, arguments)
                 flag = " [ERROR]" if result.is_error else ""
                 text = _content_text(result)
                 print(f"=== {name}{flag}\n{text}")
                 if result.is_error:
                     rc = 1
-                # Stop the batch at the first failure (a tool error, or a job
-                # failure reported in the news footer): the rest was planned on
-                # the assumption that everything before it worked.
-                if (result.is_error or "job_failed]" in text) and i + 1 < len(calls):
+                failed_job = "job_failed]" in text
+                queued_here = queued_here or bool(_QUEUED.search(text))
+                # Stop the batch at the first failure: a tool error, or a job
+                # failure in the news footer once this batch has queued jobs
+                # (they were cancelled with it, so what follows was planned on
+                # a premise that no longer holds). A failure of an older job,
+                # before this batch queued anything, is just news.
+                if (result.is_error or (failed_job and queued_here)) and i + 1 < len(calls):
                     rest = ", ".join(n for n, _ in calls[i + 1:])
                     print(f"=== stopped: {name} reported a failure, so the remaining call(s) were not run: {rest}")
                     rc = 1
                     break
     return rc
+
+
+# tool output that means a job was queued ("Job #12 (walk_to) queued.", "Plan queued: ...", "Building as jobs ...")
+_QUEUED = re.compile(r"Job #\d+ \([a-z_]+\) (queued|done|is still)|Plan queued|Building as jobs")
 
 
 def _param_text(name: str, spec: dict, required: bool, defs: dict) -> str:

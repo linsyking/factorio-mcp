@@ -159,17 +159,32 @@ def inspect(e: dict[str, Any]) -> str:
 def scan(r: dict[str, Any]) -> str:
     o = r["origin"]
     k = int(r.get("scale") or 1)
-    where = (f"grid[row][col] is map ({o['x']} + col, {o['y']} + row)" if k == 1 else
-             f"each character covers {k}x{k} tiles and shows the most important thing in them; grid[row][col] "
-             f"covers map ({o['x']} + {k}*col, {o['y']} + {k}*row) and the next {k - 1} tiles right and down")
+    rows = as_list(r.get("grid"))
+    # Every row is labelled with its map y and a ruler marks x every 10 tiles:
+    # repetitive layouts (mall rows, belt rows) are easy to misread by whole
+    # rows in an unlabelled grid.
+    ys = [o["y"] + i * k for i in range(len(rows))]
+    width = max(len(str(y)) for y in ys) if ys else 1
+    cols = len(rows[0]) if rows else 0
+    xs = [o["x"] + c * k for c in range(cols)]
+    def mark(x: int) -> int | None:  # the multiple of 10 inside this cell, if any
+        m = -(-x // 10) * 10
+        return m if m < x + k else None
+    ticks = "".join("|" if mark(x) is not None else " " for x in xs)
+    marked = [mark(x) for x in xs if mark(x) is not None]
+    where = ("one character per tile" if k == 1 else
+             f"each character covers {k}x{k} tiles (its top-left tile is the x/y shown) and shows the most important "
+             f"thing in them")
     lines = [
-        f"Scanned {r['width']}x{r['height']} tiles. Grid origin (top-left) is map ({o['x']}, {o['y']}); "
-        f"{where}. Rows run north to south.",
+        f"Scanned {r['width']}x{r['height']} tiles from map ({o['x']}, {o['y']}) (top-left), {where}. "
+        f"Each row starts with its map y; columns run east from x = {o['x']}. "
+        f"The ruler marks every 10th x" + (f" (first mark: x = {marked[0]})" if marked else "") + ". Rows run north to south.",
         "```",
-        *as_list(r.get("grid")),
+        " " * (width + 1) + ticks,
+        *[f"{str(y).rjust(width)} {row}" for y, row in zip(ys, rows)],
         "```",
         "Legend:",
-        *[f"{k} = {v}" for k, v in (r.get("legend") or {}).items()],
+        *[f"{k_} = {v}" for k_, v in (r.get("legend") or {}).items()],
     ]
     ins = as_list(r.get("inserters"))
     if ins:

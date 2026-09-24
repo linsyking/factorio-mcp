@@ -8,8 +8,22 @@
 # Optional: also publish the zip and a download page to a static web root on
 # the same host (e.g. served by Caddy):
 #   PUBLISH_DIR=/srv/site/factorio PUBLISH_SERVER_ADDRESS=host:34197 scripts/deploy_mod.sh ...
+# Optional: keep a checkout on the server in step (agents there run the MCP
+# server from it). The commit must be pushed first, so this refuses to deploy
+# with uncommitted changes, pushes, deploys, then pulls there:
+#   SERVER_REPO=/home/cc/factorio/agent/factorio-mcp scripts/deploy_mod.sh ...
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+if [ -n "${SERVER_REPO:-}" ]; then
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "uncommitted changes — commit them first (SERVER_REPO deploys push the commit and pull it on the server)" >&2
+    git status --short >&2
+    exit 1
+  fi
+  git push
+  echo "pushed $(git log --oneline -1)"
+fi
 
 if [ $# -lt 2 ]; then
   echo "usage: $0 SSH_TARGET COMPOSE_DIR [CONTAINER]" >&2
@@ -48,4 +62,8 @@ REMOTE
 if [ -n "${PUBLISH_DIR:-}" ]; then
   ssh -o BatchMode=yes "$TARGET" "mkdir -p '$PUBLISH_DIR' && cat > '$PUBLISH_DIR/$NAME'" < "$ZIP"
   ssh -o BatchMode=yes "$TARGET" "python3 - '$PUBLISH_DIR' ${PUBLISH_SERVER_ADDRESS:+--server '$PUBLISH_SERVER_ADDRESS'}" < scripts/publish_page.py
+fi
+
+if [ -n "${SERVER_REPO:-}" ]; then
+  ssh -o BatchMode=yes "$TARGET" "cd '$SERVER_REPO' && git pull --ff-only && echo \"server checkout: \$(git log --oneline -1)\""
 fi

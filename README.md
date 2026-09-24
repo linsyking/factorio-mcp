@@ -37,6 +37,10 @@ The server must be multiplayer-hosted or headless with RCON enabled, and **`auto
 
 ```bash
 scripts/deploy_mod.sh cc@your-host /path/to/compose-dir factorio   # package, copy, enable, restart
+# also publish the zip + download page, and keep a checkout on the server in step
+# (refuses uncommitted changes; pushes, deploys, then git pull there):
+PUBLISH_DIR=/srv/site/factorio PUBLISH_SERVER_ADDRESS=your-host:34197 \
+SERVER_REPO=/path/to/factorio-mcp scripts/deploy_mod.sh cc@your-host /path/to/compose-dir factorio
 ```
 
 Otherwise run `uv run factorio-mcp package-mod`, copy `dist/factorio-mcp_<version>.zip` into the server's `mods/` folder, enable it in `mod-list.json`, and restart.

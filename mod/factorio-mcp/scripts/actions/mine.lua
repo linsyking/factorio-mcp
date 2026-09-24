@@ -172,6 +172,12 @@ local function start_single(task, c)
     end
   end
   if not best then
+    local building = c.surface.find_entities_filtered({ position = target, radius = TARGET_SEARCH_RADIUS,
+      force = c.force, limit = 1 })[1]
+    if building and building.valid and building ~= c then
+      error(string.format("the %s at (%.1f, %.1f) is a building — use deconstruct to take it down",
+        building.name, building.position.x, building.position.y))
+    end
     error(string.format(
       "nothing minable within %.0f tiles of (%.1f, %.1f) — I can only mine ore, trees and rocks",
       TARGET_SEARCH_RADIUS, target.x, target.y))
@@ -179,7 +185,9 @@ local function start_single(task, c)
 
   task._entity = best
   task._entity_name = best.name
-  task._mine = { gained = {} }
+  task._mine = { gained = {}, ops = 0 }
+  -- with a count, keep mining the same spot (an ore tile) that many times
+  task.count = math.max(1, math.min(math.floor(tonumber(task.count) or 1), MAX_OPS))
 end
 
 local function tick_single(task, c)
@@ -199,10 +207,23 @@ local function tick_single(task, c)
   end
   if not result then return nil end
   if result.full then
+    if task._mine.ops > 0 then
+      return { status = "done", detail = string.format("mined %s %d times (+%s) — stopped early, my inventory is full",
+        task._entity_name, task._mine.ops, gained_list(task._mine)) }
+    end
     return {
       status = "failed",
       detail = string.format("could not mine %s — inventory full?", task._entity_name),
     }
+  end
+  task._mine.ops = task._mine.ops + 1
+  if task._mine.ops < task.count and not result.exhausted and task._entity and task._entity.valid then
+    return nil -- next operation on the same spot
+  end
+  if task.count > 1 then
+    return { status = "done", detail = string.format("mined %s %d time%s (%s)%s", task._entity_name, task._mine.ops,
+      task._mine.ops == 1 and "" or "s", gained_list(task._mine),
+      result.exhausted and " — that spot is used up now" or "") }
   end
   return {
     status = "done",

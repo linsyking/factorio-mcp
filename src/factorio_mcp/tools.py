@@ -75,7 +75,8 @@ class BuildStep(BaseModel):
 
 
 class PlanStep(BaseModel):
-    type: Literal["craft", "insert", "extract", "mine", "place", "set_recipe", "rotate", "walk_to", "wait_until"]
+    type: Literal["craft", "insert", "extract", "mine", "place", "set_recipe", "rotate", "walk_to", "wait_until", "say"]
+    text: str | None = Field(None, max_length=400, description="say: what to say when this step runs")
     recipe: str | None = Field(None, description="craft: the recipe to craft; place / set_recipe: the recipe to set on the machine")
     count: int | None = Field(None, ge=1, le=10000, description="craft: recipe executions (a belt craft makes 2); "
                               "mine: mining operations; wait_until: the item count to wait for")
@@ -509,8 +510,11 @@ def register(app: MCPServer, game: Game) -> None:
         r = await game.call("set_status", {"text": text})
         return "Status cleared." if r.get("cleared") else f"Status: {r.get('status')}"
 
-    @tool("Say something in game chat as your character.")
-    async def say(text: Annotated[str, Field(min_length=1, max_length=400)]) -> str:
+    @tool("Say something in game chat as your character: at once, or with queued=true when the jobs queued before "
+          "it have run (so an announcement doesn't come before the work it describes).")
+    async def say(text: Annotated[str, Field(min_length=1, max_length=400)], queued: bool = False) -> str:
+        if queued:
+            return await run_job({"type": "say", "text": text}, None)
         await game.call("say", {"text": text})
         return "Said."
 
@@ -567,7 +571,8 @@ def register(app: MCPServer, game: Game) -> None:
         pos = xy(x, y)
         if (resource is None) == (pos is None):
             raise ValueError("give either a position (x and y) or a resource name")
-        task = {"type": "mine", "resource": resource, "count": count} if resource else {"type": "mine", "target": pos}
+        task = ({"type": "mine", "resource": resource, "count": count} if resource
+                else {"type": "mine", "target": pos, "count": count})
         return await run_job(task, wait_s, replace)
 
     @tool("Place a building from your inventory (walks within build range, steps out of the footprint; normal "
@@ -611,6 +616,7 @@ def register(app: MCPServer, game: Game) -> None:
                          item: str | None = None, count: Annotated[int, Field(ge=1, le=100000)] = 1,
                          x: float | None = None, y: float | None = None, research: str | None = None,
                          timeout_s: Annotated[float, Field(ge=1, le=3600)] = 300,
+                         optional: Annotated[bool, Field(description="true: timing out doesn't cancel the jobs queued after it")] = False,
                          wait_s: WaitS = None, replace: Replace = False) -> str:
         if sum(v is not None for v in (seconds, item, research)) != 1:
             raise ValueError("give exactly one of seconds, item or research")
@@ -624,7 +630,7 @@ def register(app: MCPServer, game: Game) -> None:
             at = xy(x, y, "entity to watch")
             if at:
                 task["at"] = at
-        return await run_job(task, wait_s, replace)
+        return await run_job(task, wait_s, replace, optional)
 
     @tool("Set the recipe of the crafting machine at x,y (walks within reach).")
     async def set_recipe(x: Coord, y: Coord, recipe: str, wait_s: WaitS = None, replace: Replace = False) -> str:
@@ -785,7 +791,12 @@ def register(app: MCPServer, game: Game) -> None:
             return head
         res = await b.wait_job(ids[-1], waited)
         if not res.finished:
-            return head + "\n" + describe(res, waited)
+            states = [await b.job(jid) for jid in ids]
+            running = next((j for j in states if j.status == "running"), None)
+            left = sum(1 for j in states if j.status == "queued")
+            now = f"job #{running.job_id} ({running.type}) is running" if running else "the plan is still running"
+            return head + f"\nStill working after {waited:g}s: {now}, {left} step(s) queued behind it. " \
+                          f"Use job_status / job_wait, or job_cancel."
         outcomes = [await b.job(jid) for jid in ids]
         lines = [head] + [f"  #{jr.job_id} {jr.type}: {jr.status}{' — ' + jr.detail if jr.detail else ''}"
                           for jr in outcomes]
@@ -915,13 +926,17 @@ def register(app: MCPServer, game: Game) -> None:
         margin: Annotated[int, Field(ge=2, le=40, description="tiles of search space around the endpoints")] = 12,
         avoid: Annotated[list[list[float]] | None, Field(description="rectangles [x1,y1,x2,y2] to keep free")] = None,
         planned_belts: Annotated[list[list[float]] | None, Field(description="belts planned but not built yet: [x,y,direction16]")] = None,
+        through_inserters: Annotated[bool, Field(description="let the belt pass inserter pickup/drop and drill drop tiles "
+                                                 "(by default it detours around them; a belt through an inserter's "
+                                                 "pickup tile feeds that inserter)")] = False,
         build: bool = False,
         wait_s: WaitS = None,
         replace: Replace = False,
     ) -> str:
         return await route("belt", {"from": start.model_dump(exclude_none=True), "to": end.model_dump(exclude_none=True), "belt": belt, "allow_underground": allow_underground,
                                     "clear_obstacles": clear_obstacles, "margin": margin, "avoid": avoid,
-                                    "planned_belts": planned_belts}, build, wait_s, replace)
+                                    "planned_belts": planned_belts, "through_inserters": through_inserters},
+                     build, wait_s, replace)
 
     @tool("Plan a pipe route between two points on explored ground and optionally build it (build=true queues normal "
           "build jobs). Pipes never touch foreign fluid connections (no fluid mixing); pipe-to-ground pairs pass "

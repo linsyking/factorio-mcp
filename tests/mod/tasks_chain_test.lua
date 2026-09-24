@@ -28,7 +28,7 @@ local runner = {
 runner.place, runner.rotate, runner.set_recipe = runner, runner, runner
 runner.insert, runner.extract, runner.deliver = runner, runner, runner
 for _, m in ipairs({ "walk", "follow", "mine", "build", "craft", "transfer", "refuel",
-  "drive", "build_plan", "deconstruct", "fight", "defend", "build_blueprint", "wait_until" }) do
+  "drive", "build_plan", "deconstruct", "fight", "defend", "build_blueprint", "wait_until", "say" }) do
   package.loaded["scripts.actions." .. m] = runner
 end
 

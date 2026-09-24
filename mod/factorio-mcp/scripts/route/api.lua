@@ -139,6 +139,13 @@ function M.route(params, kind)
 
   local endpoint, endpoint_src = {}, {}
   local s_i = from.tile and g.idx(from.tile[1], from.tile[2])
+  -- a start on an occupied tile can't route at all ("0 expansions"): say why
+  if s_i and not from.belt and not from.continues and (g.blocked[s_i] or (g.belt and g.belt[s_i])) then
+    local tx, ty = from.tile[1] + 0.5, from.tile[2] + 0.5
+    local what = c.surface.find_entities_filtered({ position = { tx, ty }, radius = 0.5, limit = 1 })[1]
+    error(string.format("the start tile (%.1f, %.1f) is not free%s — start on a free tile next to it, or use a port "
+      .. "(drop/pickup/belt) of the entity there", tx, ty, what and (": " .. what.name .. " is there") or ""))
+  end
   if not s_i then error("from is outside the routing area") end
   endpoint[s_i] = true
   if from.src then local si = g.idx(from.src[1], from.src[2]); if si then endpoint_src[si] = true end end
@@ -176,6 +183,7 @@ function M.route(params, kind)
     endpoint = endpoint, endpoint_src = endpoint_src, allow_ug = allow_ug, ug_name = ug_name, ug_max = ug_max,
     cost = { step = cost.step, turn = cost.turn, ug = cost.underground, soft = cost.obstacle, near_belt = cost.near_belt },
     max_expansions = math.min(tonumber(params.max_expansions) or 60000, 200000), banned = {},
+    allow_touch = params.through_inserters == true,
   }
 
   local path, stats, pl, why
@@ -250,6 +258,23 @@ function M.route(params, kind)
       missing[item] = n - have
       local r = c.force.recipes[item]
       if not (r and r.enabled) then unavailable[#unavailable + 1] = item end
+    end
+  end
+
+  -- Did avoiding inserter/drill tiles make the route longer? Say so (it used
+  -- to detour silently): a quick second search that may pass through them.
+  if is_belt and not opts.allow_touch and next(g.touch) ~= nil then
+    local o2 = {}
+    for k, v in pairs(opts) do o2[k] = v end
+    o2.allow_touch, o2.banned, o2.max_expansions = true, {}, math.min(opts.max_expansions, 30000)
+    local p2 = core.search(g, o2)
+    if p2 then
+      local pl2 = core.placements(g, p2, kind)
+      if #pl2 < #pl then
+        effects[#effects + 1] = string.format("detoured %d tile(s) to keep clear of inserter pickup/drop and drill "
+          .. "drop tiles; pass through_inserters=true to route through them (a belt through an inserter's pickup "
+          .. "tile feeds that inserter)", #pl - #pl2)
+      end
     end
   end
 

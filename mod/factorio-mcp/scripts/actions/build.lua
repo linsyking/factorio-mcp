@@ -228,26 +228,21 @@ function M.set_recipe.tick(task)
   end
 
   -- Ingredients of the previous recipe come back to us; overflow spills.
-  local taken = 0
+  local taken, dropped = 0, 0
   if type(removed) == "table" then
     for _, stack in ipairs(removed) do
       if stack.name and (stack.count or 0) > 0 then
-        local inserted = c.insert({ name = stack.name, count = stack.count })
-        taken = taken + inserted
-        if inserted < stack.count then
-          pcall(c.surface.spill_item_stack, {
-            position = c.position,
-            stack = { name = stack.name, count = stack.count - inserted },
-            force = c.force,
-          })
-        end
+        local d = items.give(c, { name = stack.name, count = stack.count, quality = stack.quality })
+        taken = taken + stack.count - d
+        dropped = dropped + d
       end
     end
   end
   return {
     status = "done",
-    detail = string.format("set %s's recipe to %s%s", e.name, task.recipe,
-      taken > 0 and string.format(" (took %d leftover items into my inventory)", taken) or ""),
+    detail = string.format("set %s's recipe to %s%s%s", e.name, task.recipe,
+      taken > 0 and string.format(" (took %d leftover items into my inventory)", taken) or "",
+      dropped > 0 and string.format("; %d didn't fit and are on the ground at my feet", dropped) or ""),
   }
 end
 

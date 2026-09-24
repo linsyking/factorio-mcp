@@ -123,7 +123,29 @@ function M.explain(c, entity_name, pos, direction)
   if me then
     return "your character is standing in the footprint"
   end
-  return "blocked (terrain, tile restrictions or an entity edge overlapping the footprint)"
+  -- Name what is in the way: an entity whose edge overlaps the footprint
+  -- (found just outside it), else the tiles under it.
+  local grown = { { area[1][1] - 0.3, area[1][2] - 0.3 }, { area[2][1] + 0.3, area[2][2] + 0.3 } }
+  local near, nd
+  local cx, cy = (area[1][1] + area[2][1]) / 2, (area[1][2] + area[2][2]) / 2
+  for _, e in ipairs(surface.find_entities_filtered({ area = grown })) do
+    if e.valid and e ~= c and e.type ~= "resource" and e.type ~= "item-entity" then
+      local d = (e.position.x - cx) ^ 2 + (e.position.y - cy) ^ 2
+      if not nd or d < nd then near, nd = e, d end
+    end
+  end
+  if near then
+    return string.format("the %s at (%.1f, %.1f) overlaps the footprint's edge — move it or place one tile over",
+      near.name, near.position.x, near.position.y)
+  end
+  local tiles, seen = {}, {}
+  pcall(function()
+    for _, t in ipairs(surface.find_tiles_filtered({ area = area })) do
+      if not seen[t.name] then seen[t.name] = true tiles[#tiles + 1] = t.name end
+    end
+  end)
+  return "blocked by the ground here (tiles: " .. (#tiles > 0 and table.concat(tiles, ", ") or "unknown")
+    .. ") — this tile type may not allow building, or the spot is outside the map"
 end
 
 return M

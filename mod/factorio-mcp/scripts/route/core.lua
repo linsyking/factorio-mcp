@@ -128,6 +128,7 @@ function M.search(g, opts)
   local banned = opts.banned or {}
   local endpoint = opts.endpoint or {}
   local ep_src = opts.endpoint_src or {}
+  local allow_touch = opts.allow_touch == true -- belts may pass inserter pickup/drop and drill drop tiles
   local is_belt = opts.kind ~= "pipe"
 
   -- heuristic target: centroid-free — take the nearest goal tile by Manhattan
@@ -151,7 +152,7 @@ function M.search(g, opts)
   local function belt_ok(i, d)
     if not free(i) then return false end
     if not endpoint[i] then
-      if g.feed[i] or g.touch[i] then return false end
+      if g.feed[i] or (g.touch[i] and not allow_touch) then return false end
     end
     return true
   end

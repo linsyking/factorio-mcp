@@ -10,6 +10,7 @@ local companion = require("scripts.companion")
 local placement = require("scripts.placement")
 local items = require("scripts.items")
 local approach = require("scripts.actions.approach")
+local craft = require("scripts.actions.craft")
 
 local M = {}
 
@@ -126,7 +127,6 @@ function M.start(task)
   task.stop_on_error = task.stop_on_error == true
   task._index = 1
   task._placed = 0
-  task._results = {}
   task._failures = {}
 end
 
@@ -158,14 +158,7 @@ local function apply_recipe(c, e, recipe_name)
   if type(removed) == "table" then
     for _, stack in ipairs(removed) do
       if stack.name and (stack.count or 0) > 0 then
-        local kept = c.insert({ name = stack.name, count = stack.count })
-        if kept < stack.count then
-          pcall(c.surface.spill_item_stack, {
-            position = c.position,
-            stack = { name = stack.name, count = stack.count - kept },
-            force = c.force,
-          })
-        end
+        items.give(c, { name = stack.name, count = stack.count, quality = stack.quality }) -- overflow: ground, not belts
       end
     end
   end
@@ -243,7 +236,6 @@ end
 -- result when the plan is over (or stop_on_error tripped), else nil.
 local function advance(task, ok, why)
   local i = task._index
-  task._results[i] = ok and { ok = true } or { ok = false, why = why }
   if not ok then
     task._failures[#task._failures + 1] = { index = i, why = why }
   end
@@ -357,6 +349,14 @@ function M.tick(task)
       step.item, table.concat(issues, "; ")))
   end
   return advance(task, true)
+end
+
+-- Cancelled while its missing items were still being crafted: cancel those
+-- crafts too (their ingredients are refunded).
+function M.stop(task)
+  if task._waiting_for_crafts then
+    craft.cancel_queue(companion.get())
+  end
 end
 
 return M
