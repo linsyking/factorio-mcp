@@ -88,6 +88,7 @@ Task types:
 - resources and crafting: `mine`, `craft`
 - placing and configuring: `place`, `rotate`, `set_recipe`
 - inventory transfers: `insert`, `extract`
+- ground: `pick_up` — collect item-entities within a `radius` (≤25) of a `target` (default: where the character stands), walking over them into the inventory; characters do not collect by walking past
 - building: `build_plan`, `build_blueprint`, `deconstruct`
 - combat and upkeep: `fight`, `defend_area`, `keep_fueled`
 

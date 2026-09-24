@@ -76,7 +76,8 @@ class BuildStep(BaseModel):
 
 
 class PlanStep(BaseModel):
-    type: Literal["craft", "insert", "extract", "mine", "place", "set_recipe", "rotate", "walk_to", "wait_until", "say"]
+    type: Literal["craft", "insert", "extract", "mine", "place", "set_recipe", "rotate", "walk_to", "wait_until", "say",
+                  "pick_up"]
     text: str | None = Field(None, max_length=4000, description="say: what to say when this step runs (cut to 400 characters)")
     recipe: str | None = Field(None, description="craft: the recipe to craft; place / set_recipe: the recipe to set on the machine")
     count: int | None = Field(None, ge=1, le=10000, description="craft: recipe executions (a belt craft makes 2); "
@@ -95,6 +96,7 @@ class PlanStep(BaseModel):
     pickup_from: Point | None = Field(None, description=PICKUP_FROM)
     optional: bool | None = Field(None, description="true: if this step fails, the steps after it still run (e.g. a fuel top-up)")
     fast_replace: bool | None = Field(None, description="place: swap one of your buildings standing there; the same item refreshes it (else the step fails)")
+    radius: float | None = Field(None, ge=0.5, le=25, description="pick_up: sweep radius around the target in tiles (default 5)")
 
 
 class TrainStop(BaseModel):
@@ -657,6 +659,20 @@ def register(app: MCPServer, game: Game) -> None:
                        wait_s: WaitS = None, replace: Replace = False) -> str:
         return await run_job({"type": "drive_to", "target": {"x": x, "y": y}, "arrive_within": arrive_within}, wait_s, replace)
 
+    @tool("Collect items lying on the ground — a destroyed chest's spill, a destroyed belt's cargo — walking over "
+          "everything within radius of the point (default: where you stand, 5 tiles) into your inventory. Characters "
+          "do not pick items up by merely walking past them, so this sweeps explicitly. Ground items don't despawn; "
+          "a character corpse (which does) is emptied with extract_items at its position.")
+    async def pick_up(x: Coord | None = None, y: Coord | None = None,
+                      radius: Annotated[float, Field(ge=0.5, le=25)] = 5,
+                      wait_s: WaitS = None, replace: Replace = False) -> str:
+        if (x is None) != (y is None):
+            raise ValueError("give both x and y, or neither (to pick up where you stand)")
+        task: dict[str, Any] = {"type": "pick_up", "radius": radius}
+        if x is not None:
+            task["target"] = {"x": x, "y": y}
+        return await run_job(task, wait_s, replace)
+
     @tool("Persistent job: follow a player at a distance until cancelled. Replaces your current jobs.")
     async def follow_player(player: str | None = None, distance: Annotated[float, Field(ge=1, le=10)] = 3) -> str:
         return await run_job({"type": "follow_player", "player": player, "distance": distance}, 0, True)
@@ -864,10 +880,10 @@ def register(app: MCPServer, game: Game) -> None:
                 "anchor": {"x": anchor_x, "y": anchor_y}, "stop_on_error": stop_on_error}
         return await run_job(task, wait_s, replace)
 
-    @tool("Queue a sequence of actions (craft, insert, extract, mine, place, set_recipe, rotate, walk_to) as chained "
-          "jobs. If one fails, the rest is cancelled, except that a step marked optional only reports its failure. "
-          "Place steps for inserters can give drop_to / pickup_from instead of a direction. Waits for the last one up "
-          "to wait_s and then lists every step's outcome.")
+    @tool("Queue a sequence of actions (craft, insert, extract, mine, place, set_recipe, rotate, walk_to, pick_up) as "
+          "chained jobs. If one fails, the rest is cancelled, except that a step marked optional only reports its "
+          "failure. Place steps for inserters can give drop_to / pickup_from instead of a direction. Waits for the last "
+          "one up to wait_s and then lists every step's outcome.")
     async def run_plan(steps: Annotated[list[PlanStep], Field(min_length=1, max_length=25)],
                        wait_s: WaitS = None, replace: Replace = False) -> str:
         b = await game.bridge()
