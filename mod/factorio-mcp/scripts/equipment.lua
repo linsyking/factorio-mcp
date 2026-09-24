@@ -193,12 +193,27 @@ function M.slot_ammo(c, slot)
 end
 
 -- Equipment snapshot for perceive's companion block:
--- { gun = <name|nil>, ammo = {name: count}, armor = <name|nil> }.
+-- { gun = <all gun slots joined: "pistol + submachine-gun"|nil>,
+--    ammo = {name: count}, armor = <name|nil> }.
 -- Nil-safe and pcall-guarded — never raises.
 function M.summary(c)
   local out = { ammo = {} }
   if not (c and c.valid) then return out end
-  out.gun = M.current_gun(c)
+  -- EVERY gun slot, not just the selected one: the engine auto-fills an
+  -- empty gun slot from a crafted gun (the same engine behavior that
+  -- lands crafted ammo in the ammo slot), and a gun in a second slot was
+  -- invisible to every read until an explicit equip "resolved" it.
+  pcall(function()
+    local guns = {}
+    local gun_inv = c.get_inventory(defines.inventory.character_guns)
+    if gun_inv then
+      for i = 1, #gun_inv do
+        local s = gun_inv[i]
+        if s.valid_for_read then guns[#guns + 1] = s.name end
+      end
+    end
+    if #guns > 0 then out.gun = table.concat(guns, " + ") end
+  end)
   pcall(function()
     local ammo_inv = c.get_inventory(defines.inventory.character_ammo)
     if ammo_inv then

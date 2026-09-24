@@ -94,7 +94,7 @@ class PlanStep(BaseModel):
     drop_to: Point | None = Field(None, description=DROP_TO)
     pickup_from: Point | None = Field(None, description=PICKUP_FROM)
     optional: bool | None = Field(None, description="true: if this step fails, the steps after it still run (e.g. a fuel top-up)")
-    fast_replace: bool | None = Field(None, description="place: swap one of your buildings standing there (else the step fails)")
+    fast_replace: bool | None = Field(None, description="place: swap one of your buildings standing there; the same item refreshes it (else the step fails)")
 
 
 class TrainStop(BaseModel):
@@ -684,6 +684,8 @@ def register(app: MCPServer, game: Game) -> None:
                            pickup_from: Annotated[Point | None, Field(description=PICKUP_FROM)] = None,
                            fast_replace: Annotated[bool, Field(description="if one of your buildings is in the way, swap it like a "
                                                                "player does (it goes to your inventory, its contents into the new one); "
+                                                               "placing the SAME item refreshes it — the old one returns to your "
+                                                               "inventory and the new one is placed fresh (wall maintenance); "
                                                                "otherwise the placement fails")] = False,
                            wait_s: WaitS = None, replace: Replace = False) -> str:
         direction = resolve_direction(x, y, direction, drop_to, pickup_from)

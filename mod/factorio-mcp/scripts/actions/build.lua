@@ -95,19 +95,47 @@ function M.place.tick(task)
     }
   end
 
-  local can_place = c.surface.can_place_entity({
-    name = task._entity_name,
-    position = task.position,
-    direction = task.direction,
-    force = c.force,
-    build_check_type = defines.build_check_type.manual,
-  })
-  if not can_place then
-    return {
-      status = "failed",
-      detail = string.format("can't place %s at (%.1f, %.1f) — %s",
-        task.item, task.position.x, task.position.y, placement.explain(c, task._entity_name, task.position, task.direction)),
-    }
+  -- The engine has no same-name fast replace: its manual build check refuses
+  -- a tile held by an identical entity (the real game does nothing when you
+  -- place a wall over a wall), so a same-item fast_replace always died at
+  -- "blocked by stone-wall" at the target's own position, never reaching
+  -- create_entity. Same item + fast_replace is a REFRESH: hand the old one
+  -- back (like deconstruct) and place the new one fresh — damaged-wall
+  -- maintenance is the standing use.
+  local refresh, refresh_note = nil, ""
+  if occ and task.fast_replace == true then
+    local q = (occ.quality and occ.quality.name) or "normal"
+    if occ.name == task._entity_name and q == (task._quality or "normal") then refresh = occ end
+  end
+  local swap = false
+  if refresh then
+    local inv = c.get_main_inventory()
+    local removed = false
+    if inv then pcall(function() removed = refresh.mine({ inventory = inv, raise_destroyed = true }) end) end
+    if not removed then
+      return {
+        status = "failed",
+        detail = string.format("couldn't take down the old %s at (%.1f, %.1f) to replace it — my inventory is probably full",
+          refresh.name, refresh.position.x, refresh.position.y),
+      }
+    end
+    refresh_note = " — replaced the old one (returned to my inventory)"
+  else
+    local can_place = c.surface.can_place_entity({
+      name = task._entity_name,
+      position = task.position,
+      direction = task.direction,
+      force = c.force,
+      build_check_type = defines.build_check_type.manual,
+    })
+    if not can_place then
+      return {
+        status = "failed",
+        detail = string.format("can't place %s at (%.1f, %.1f) — %s",
+          task.item, task.position.x, task.position.y, placement.explain(c, task._entity_name, task.position, task.direction)),
+      }
+    end
+    swap = occ ~= nil
   end
 
   local built = c.surface.create_entity({
@@ -120,8 +148,8 @@ function M.place.tick(task)
     raise_built = true,
     -- a player-style fast replace: the old building goes to this character
     -- and its contents into the new one (what fits)
-    fast_replace = occ ~= nil and task.fast_replace == true or nil,
-    character = (occ ~= nil and task.fast_replace == true) and c or nil,
+    fast_replace = swap and task.fast_replace == true or nil,
+    character = (swap and task.fast_replace == true) and c or nil,
   })
   if not built then
     return {
@@ -150,9 +178,9 @@ function M.place.tick(task)
   end
   return {
     status = "done",
-    detail = string.format("placed %s at (%.1f, %.1f)%s%s",
+    detail = string.format("placed %s at (%.1f, %.1f)%s%s%s",
       task.item, built.position.x, built.position.y,
-      task.direction ~= 0 and (" facing " .. dir_name(task.direction)) or "", recipe_note),
+      task.direction ~= 0 and (" facing " .. dir_name(task.direction)) or "", refresh_note, recipe_note),
   }
 end
 

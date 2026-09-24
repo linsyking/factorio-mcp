@@ -100,7 +100,7 @@ Every task with a map target walks within reach first, and each movement goal is
 - Ingredients are counted from what the character carries — chests don't count. A partial start says why: the chain-aware ceiling (`get_craftable_count`, intermediates included) and the directly short items.
 - `begin_crafting` auto-queues intermediates (greens queue inserters, circuits, cable…); the start report names the queue depth and the intermediate recipes.
 - A queue that makes no progress while the inventory is full fails the job with instructions: completed results are held back until slots free up (the engine holds them in the queue) while started crafts' ingredients are already spent — this is the "half delivered / items vanished" phenomenon, not an inventory desync.
-- Cancelling or failing a craft refunds what's queued; a `craft_cancelled` event reports what was already crafted and kept — products and intermediates both.
+- Cancelling or failing a craft refunds what's queued; a `craft_cancelled` event reports what was already crafted and kept — products and intermediates both. The kept list is the live main-inventory delta against the job's own start snapshot, so after a server restart a resurrected craft job's cancellation can list crafts completed before the save (the items are real — they're in the rolled-back inventory).
 
 ### Belt checks
 
