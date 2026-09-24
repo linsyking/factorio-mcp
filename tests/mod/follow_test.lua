@@ -161,6 +161,11 @@ check(status.line("agent") == "building the coal outpost — mining coal 12/60 (
 storage.tasks.by_companion.agent.active = { type = "build_plan", _index = 8, steps = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 } }
 storage.tasks.by_companion.agent.queue = {}
 check(status.line("agent") == "building the coal outpost — building 7/10", "status: build_plan progress")
+game.tick = 100 + 12 * 60
+storage.tasks.by_companion.agent.active = { type = "walk_to", target = { x = 80, y = -20 },
+  _walk = { phase = "waiting", request_tick = 100 } }
+check(status.line("agent") == "building the coal outpost — walking to (80, -20), waiting for a path (12 s)",
+  "status: shows how long the character has been waiting for a path")
 status.set({ text = string.rep("x", 300) })
 check(#storage.statuses.agent.text == 120, "status: long text is cut to 120 characters")
 check(status.set({ text = "  " }).cleared and storage.statuses.agent == nil, "status: blank text clears it")

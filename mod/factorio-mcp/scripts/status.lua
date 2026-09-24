@@ -66,6 +66,11 @@ function M.activity(name)
     elseif t.item then s = string.format("waiting for %d %s", t.count or 1, tostring(t.item))
     else s = "waiting" end
   end
+  -- waiting for the engine pathfinder (any walker inside the job)
+  local w = t._walk or (t._approach and t._approach.walk) or (t._aside and t._aside.walk)
+  if w and (w.phase == "waiting" or w.phase == "retry_wait") and w.request_tick then
+    s = s .. string.format(", waiting for a path (%d s)", math.floor((game.tick - w.request_tick) / 60))
+  end
   if queued > 0 then s = s .. string.format(" (+%d queued)", queued) end
   return s
 end

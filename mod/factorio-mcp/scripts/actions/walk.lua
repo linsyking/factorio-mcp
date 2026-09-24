@@ -10,9 +10,26 @@ local M = {}
 local WAYPOINT_RADIUS_SQ = 0.25 -- advance to the next waypoint within 0.5 tiles
 local STUCK_CHECK_TICKS = 60
 local STUCK_EPSILON_SQ = 0.01 -- moved less than 0.1 tiles in a check window = stuck
-local PATH_WAIT_TICKS = 90 -- ~1.5s without a pathfinder answer → straight-line fallback
-local RETRY_DELAY_TICKS = 30
-local MAX_RETRIES = 3
+-- The engine answers every request_path exactly once (a path, no path, or
+-- "try again later") via on_script_path_request_finished, however long it
+-- takes under load — so the walker waits for that answer instead of timing
+-- out, standing still while it waits. Answers can only be lost if our own
+-- bookkeeping is (it survives mod updates, see state.lua); the watchdog below
+-- is a safety net for that, not a timeout for slow answers.
+local WATCHDOG_TICKS = 120 * 60   -- no answer after 2 min: something lost it → ask again
+local MAX_REQUESTS = 2            -- …then fail (or walk straight if the goal is close)
+local RETRY_DELAY_TICKS = 60      -- pathfinder busy ("try again later") → ask again after 1 s
+local MAX_RETRIES = 10
+local STRAIGHT_MAX_DIST = 16      -- only a short hop may be walked without a path
+-- Progress: sliding along a shore or wall keeps the character moving, so
+-- "not moving" alone never fires. Fail (after one re-path) when the walker
+-- gets no closer to its current goal for this long, and always by a deadline.
+local NO_PROGRESS_TICKS = 6 * 60
+local PROGRESS_MIN = 0.5          -- tiles closer than the best so far
+local OFF_COURSE_TILES = 3        -- this much farther than the best so far: sliding away (a path leg never recedes)
+local SPEED_TILES_PER_TICK = 0.15 -- character running speed
+local DEADLINE_FACTOR, DEADLINE_SLACK_TICKS = 4, 30 * 60
+local RESULT_TTL_TICKS = 10 * 60 * 60
 
 -- tan(22.5 deg): boundary between cardinal and diagonal octants
 local OCTANT_RATIO = 0.41421356
@@ -39,7 +56,14 @@ local function dist_sq(a, b)
   return dx * dx + dy * dy
 end
 
+local function results()
+  storage.path_results = storage.path_results or {}
+  return storage.path_results
+end
+
 local function request_path(state, c, task_id)
+  -- a newer request replaces this walker's pending one: nobody wants that answer
+  if state.request_id then storage.path_requests[state.request_id] = nil end
   local id = c.surface.request_path({
     bounding_box = { { -0.2, -0.2 }, { 0.2, 0.2 } },
     collision_mask = prototypes.entity["character"].collision_mask,
@@ -50,26 +74,34 @@ local function request_path(state, c, task_id)
     can_open_gates = true,
     entity_to_ignore = c,
     path_resolution_modifier = 0,
-    pathfind_flags = { cache = false, prefer_straight_paths = true },
+    -- the engine's path cache answers repeat trips fast; a re-path after
+    -- getting stuck bypasses it to see new obstacles
+    pathfind_flags = { cache = not state.no_cache, prefer_straight_paths = true },
   })
-  storage.path_requests[id] = { name = companion.context(), task_id = task_id }
+  storage.path_requests[id] = { name = companion.context(), task_id = task_id, tick = game.tick }
   state.request_id = id
   state.request_tick = game.tick
+  state.requests = (state.requests or 0) + 1
   state.phase = "waiting"
-  state.last_check_tick = nil
-  state.last_pos = nil
 end
 
--- Pop the pathfinder result on_path_finished stashed on the active task of
--- the current companion, but only if it answers THIS walker's request.
-local function take_path_result(state, task_id)
-  local l = storage.tasks.by_companion[companion.context()]
-  local task = l and l.active
-  if not task or task.id ~= task_id then return nil end
-  local result = task._path_result
-  if not result or result.id ~= state.request_id then return nil end
-  task._path_result = nil
-  return result
+-- The answer to THIS walker's request, if it has arrived (results are kept by
+-- request id, so walkers never take or overwrite each other's answers).
+local function take_path_result(state)
+  local r = results()[state.request_id]
+  if r then results()[state.request_id] = nil end
+  return r
+end
+
+-- Forget answers nobody collected (their walker finished or was cancelled).
+local function prune_results()
+  local now = game.tick
+  for id, r in pairs(results()) do
+    if now - (r.tick or 0) > RESULT_TTL_TICKS then results()[id] = nil end
+  end
+  for id, e in pairs(storage.path_requests) do
+    if now - (e.tick or 0) > RESULT_TTL_TICKS then storage.path_requests[id] = nil end
+  end
 end
 
 -- (Re)initialize a walker. `state` must be a plain table stored on the task;
@@ -86,17 +118,57 @@ function M.begin(state, c, target, arrive_within)
   state.arrive_within = math.max(tonumber(arrive_within) or 1.0, 0.1)
   state.phase = "request"
   state.retries = 0
+  state.requests = 0
   state.repathed = false
+  state.deadline = nil -- set when the character starts moving (waiting for a path doesn't count)
 end
 
 -- Advance the walker one tick. Returns nil while moving, "arrived" once within
 -- arrive_within of the target, or {failed = "reason"} when it gives up.
+local function fail(state, c, reason)
+  if state.request_id then storage.path_requests[state.request_id] = nil end
+  c.walking_state = { walking = false }
+  return { failed = reason }
+end
+
+local function near_blocked_goal(state, c, remaining)
+  if remaining > 3 then return false end
+  local blocked = false
+  pcall(function() blocked = not c.surface.can_place_entity({ name = "character", position = state.target }) end)
+  return blocked
+end
+
+-- No usable path: a short hop may still be walked straight (the goal itself
+-- may be blocked, e.g. a rock); a long one fails with the reason.
+local function no_path(state, c, why)
+  local d = math.sqrt(dist_sq(c.position, state.target))
+  if d <= STRAIGHT_MAX_DIST then
+    state.phase = "straight"
+    return nil
+  end
+  return fail(state, c, string.format("%s — (%.1f, %.1f) is %.0f tiles away; water, cliffs or buildings may block "
+    .. "every way (an island?). Try a goal on this side, or walk in shorter legs", why, state.target.x, state.target.y, d))
+end
+
 function M.step(state, c, task_id)
   local pos = c.position
+  if game.tick % 3600 == 0 then prune_results() end
 
   if dist_sq(pos, state.target) <= state.arrive_within * state.arrive_within then
     c.walking_state = { walking = false }
     return "arrived"
+  end
+  if state.deadline and game.tick > state.deadline then
+    local remaining = math.sqrt(dist_sq(pos, state.target))
+    state.deadline = nil
+    if near_blocked_goal(state, c, remaining) then
+      state.blocked_goal = true
+      c.walking_state = { walking = false }
+      return "arrived"
+    end
+    return fail(state, c, string.format("gave up after walking %.0f s, at (%.1f, %.1f), still %.1f tiles from the "
+      .. "target — the way there is blocked or much longer than expected",
+      (game.tick - (state.moving_since or game.tick)) / 60, pos.x, pos.y, remaining))
   end
 
   if state.phase == "request" then
@@ -104,27 +176,37 @@ function M.step(state, c, task_id)
   end
 
   if state.phase == "waiting" then
-    local result = take_path_result(state, task_id)
+    local result = take_path_result(state)
     if result then
       if result.try_again_later then
         state.retries = state.retries + 1
         if state.retries > MAX_RETRIES then
-          state.phase = "straight" -- pathfinder too busy; just head there
+          local r = no_path(state, c, "the pathfinder stayed busy")
+          if r then return r end
         else
           state.phase = "retry_wait"
           state.retry_at = game.tick + RETRY_DELAY_TICKS
         end
       elseif not result.path or #result.path == 0 then
-        state.phase = "straight" -- no path found: straight-line fallback
+        local r = no_path(state, c, "the pathfinder found no path")
+        if r then return r end
       else
         state.path = result.path
         state.waypoint = 1
         state.phase = "following"
+        state.best, state.best_tick = nil, nil
       end
-    elseif game.tick - state.request_tick > PATH_WAIT_TICKS then
-      storage.path_requests[state.request_id] = nil
-      state.phase = "straight"
-    else
+    elseif game.tick - state.request_tick > WATCHDOG_TICKS then
+      if state.requests < MAX_REQUESTS then
+        log(string.format("[factorio-mcp] path request %s got no answer in %d s; asking again",
+          tostring(state.request_id), WATCHDOG_TICKS / 60))
+        request_path(state, c, task_id)
+      else
+        local r = no_path(state, c, "the pathfinder didn't answer")
+        if r then return r end
+      end
+    end
+    if state.phase == "waiting" then
       c.walking_state = { walking = false }
       return nil
     end
@@ -138,16 +220,25 @@ function M.step(state, c, task_id)
     return nil
   end
 
+  -- following/straight: a deadline for the walk, from the distance left
+  if not state.deadline then
+    local d0 = math.sqrt(dist_sq(pos, state.target))
+    state.moving_since = game.tick
+    state.deadline = game.tick + math.floor(DEADLINE_FACTOR * d0 / SPEED_TILES_PER_TICK) + DEADLINE_SLACK_TICKS
+  end
+
   -- following/straight: pick this tick's goal
   local goal
   if state.phase == "following" then
     local path = state.path
     while state.waypoint <= #path and dist_sq(pos, path[state.waypoint]) <= WAYPOINT_RADIUS_SQ do
       state.waypoint = state.waypoint + 1
+      state.best, state.best_tick = nil, nil -- a new waypoint: progress starts over
     end
     if state.waypoint > #path then
       state.phase = "straight" -- path spent; close the last stretch directly
       goal = state.target
+      state.best, state.best_tick = nil, nil
     else
       goal = path[state.waypoint]
     end
@@ -155,40 +246,47 @@ function M.step(state, c, task_id)
     goal = state.target
   end
 
+  -- Progress towards the current goal (waypoint or target). Sliding along an
+  -- obstacle keeps moving but gets no closer; standing still is caught sooner.
+  local d = math.sqrt(dist_sq(pos, goal))
+  if not state.best or d < state.best - PROGRESS_MIN then
+    state.best, state.best_tick = d, game.tick
+  end
+  local stuck_still = false
   if not state.last_check_tick then
     state.last_check_tick = game.tick
     state.last_pos = { x = pos.x, y = pos.y }
   elseif game.tick - state.last_check_tick >= STUCK_CHECK_TICKS then
-    if dist_sq(pos, state.last_pos) < STUCK_EPSILON_SQ then
-      if not state.repathed then
-        state.repathed = true
-        state.path = nil
-        request_path(state, c, task_id)
-        c.walking_state = { walking = false }
-        return nil
-      end
-      c.walking_state = { walking = false }
-      -- The goal itself may be an obstacle (a rock, a building): standing
-      -- right next to it is as close as anyone can get.
-      local remaining = math.sqrt(dist_sq(pos, state.target))
-      if remaining <= 3 then
-        local blocked = false
-        pcall(function()
-          blocked = not c.surface.can_place_entity({ name = "character", position = state.target })
-        end)
-        if blocked then
-          state.blocked_goal = true
-          return "arrived"
-        end
-      end
-      return {
-        failed = string.format(
-          "got stuck at (%.1f, %.1f), still %.1f tiles from the target — water, cliffs or buildings may be in the way",
-          pos.x, pos.y, remaining),
-      }
-    end
+    stuck_still = dist_sq(pos, state.last_pos) < STUCK_EPSILON_SQ
     state.last_check_tick = game.tick
     state.last_pos = { x = pos.x, y = pos.y }
+  end
+  local off_course = d > state.best + OFF_COURSE_TILES
+  local no_progress = off_course or game.tick - state.best_tick >= NO_PROGRESS_TICKS
+  if stuck_still or no_progress then
+    local remaining = math.sqrt(dist_sq(pos, state.target))
+    -- The goal itself may be an obstacle (a rock, a building): standing
+    -- right next to it is as close as anyone can get.
+    if near_blocked_goal(state, c, remaining) then
+      state.blocked_goal = true
+      c.walking_state = { walking = false }
+      return "arrived"
+    end
+    if not state.repathed then
+      state.repathed = true
+      state.no_cache = true
+      state.path = nil
+      state.deadline = nil
+      state.best, state.best_tick = nil, nil
+      state.last_check_tick, state.last_pos = nil, nil
+      state.requests = 0
+      request_path(state, c, task_id)
+      c.walking_state = { walking = false }
+      return nil
+    end
+    return fail(state, c, string.format(
+      "got stuck at (%.1f, %.1f), still %.1f tiles from the target (%s) — water, cliffs or buildings may be in the way",
+      pos.x, pos.y, remaining, stuck_still and "not moving" or "moving but getting no closer"))
   end
 
   -- walking_state only lasts one tick, so it must be re-set every tick
@@ -196,14 +294,25 @@ function M.step(state, c, task_id)
   return nil
 end
 
+-- Raise the engine pathfinder's per-tick budget (mod setting, 1 = vanilla):
+-- by default it expands 1000 nodes per tick for everyone together, so several
+-- agents asking for long paths at once queue for seconds. Called on init,
+-- configuration changes and when the setting changes.
+function M.apply_pathfinder_budget()
+  local m = 4
+  pcall(function() m = settings.global["factorio-mcp-pathfinder-budget"].value end)
+  pcall(function()
+    local pf = game.map_settings.path_finder
+    pf.max_steps_worked_per_tick = 1000 * m
+    pf.max_work_done_per_tick = 8000 * m
+  end)
+end
+
 -- Wired in control.lua to defines.events.on_script_path_request_finished.
 function M.on_path_finished(event)
   local entry = storage.path_requests[event.id]
-  if not entry then return end
+  if not entry then return end -- not ours, or the walker moved on
   storage.path_requests[event.id] = nil
-  local l = storage.tasks.by_companion[entry.name]
-  local task = l and l.active
-  if not task or task.id ~= entry.task_id then return end
   local waypoints
   if event.path then
     waypoints = {}
@@ -211,11 +320,7 @@ function M.on_path_finished(event)
       waypoints[i] = { x = wp.position.x, y = wp.position.y }
     end
   end
-  task._path_result = {
-    id = event.id,
-    path = waypoints,
-    try_again_later = event.try_again_later or false,
-  }
+  results()[event.id] = { path = waypoints, try_again_later = event.try_again_later or false, tick = game.tick }
 end
 
 -- walk_to task runner

@@ -44,4 +44,13 @@ data:extend({
     maximum_value = 1000,
     order = "e",
   },
+  {
+    type = "int-setting",
+    name = "factorio-mcp-pathfinder-budget",
+    setting_type = "runtime-global",
+    default_value = 4,
+    minimum_value = 1,
+    maximum_value = 16,
+    order = "f",
+  },
 })

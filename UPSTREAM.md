@@ -45,6 +45,20 @@ factorio-mcp is a fork of **[matteomekhail/Agentic-Factorio](https://github.com/
 - **Optional jobs, stop-on-failure batches, per-step `run_plan` results, strict tool arguments.**
 - **Engine mining:** hand-mining uses the engine's own mining (selected entity + `mining_state`). The character shows the mining animation, and timing and production statistics are vanilla. A script timer is the fallback when the engine can't be pointed at exactly the target.
 
+## Fixed: walker hangs under load (mod 0.2.10, from an agent's report)
+
+- **The pathfinder's answer is waited for; it always comes.** The engine answers every `request_path` exactly once (`on_script_path_request_finished`: a path, no path, or "try again later"), however long it takes. The walker used to give up after 1.5 s and walk blindly; under a six-character load valid paths hadn't arrived yet, and late answers were dropped.
+  - Now it waits, standing still, with no timeout for slowness.
+  - Answers could only get lost through our own bookkeeping: `state.init` wiped pending requests on every mod update. It keeps them now.
+  - A 2-minute watchdog re-asks once, as a safety net that should never fire.
+  - "No path", or a pathfinder that stays busy, ends the walk with the reason. Only a hop of 16 tiles or less may still be walked straight (the goal may itself be blocked, e.g. a rock).
+- **Faster answers.**
+  - The mod setting `factorio-mcp-pathfinder-budget` (default 4, 1 = vanilla) multiplies the engine's per-tick pathfinder work. Vanilla expands 1000 nodes per tick for every character and biter together. This changes map settings.
+  - Requests use the engine's path cache again; only a re-path after getting stuck bypasses it.
+  - The status line shows "waiting for a path (N s)".
+- **Answers are stored by request id** (`storage.path_results`). Two walkers of one task (approach, then step aside) no longer take or overwrite each other's answer; answers nobody collects expire after 10 minutes.
+- **A walk always ends.** Besides "not moving", it now also counts as stuck when it gets no closer to its current waypoint for 6 s, or when it drifts 3+ tiles farther away (sliding along a shore or wall). After one re-path it fails ("moving but getting no closer"). There is also a deadline of 4× the straight-line walking time + 30 s from when it starts moving.
+
 ## Fixed from an agent's bug report (mod 0.2.9)
 
 - A `place` step's `recipe` is applied, and checked before walking. It used to be silently ignored.

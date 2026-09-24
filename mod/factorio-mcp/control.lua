@@ -96,6 +96,7 @@ local function initialize()
   state.init()
   companion.normalize_all()
   pcall(follow.migrate)
+  walk.apply_pathfinder_budget()
 end
 
 script.on_init(initialize)
@@ -111,6 +112,9 @@ end)
 script.on_event(defines.events.on_tick, tasks.on_tick)
 script.on_nth_tick(follow.CHECK_TICKS, follow.on_check)
 script.on_event(defines.events.on_gui_click, follow.on_gui_click)
+script.on_event(defines.events.on_runtime_mod_setting_changed, function(e)
+  if e.setting == "factorio-mcp-pathfinder-budget" then walk.apply_pathfinder_budget() end
+end)
 follow.register_commands()
 script.on_event(defines.events.on_script_path_request_finished, walk.on_path_finished)
 script.on_event(defines.events.on_entity_damaged, events.on_entity_damaged,

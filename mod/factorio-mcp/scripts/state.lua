@@ -17,8 +17,11 @@ function M.init()
   storage.companions = storage.companions or {}
   storage.bindings = storage.bindings or {}
 
-  -- pathfinder bookkeeping: request id -> {name, task_id} (see actions/walk.lua)
-  storage.path_requests = {}
+  -- pathfinder bookkeeping: request id -> {name, task_id, tick}, and answers
+  -- by request id (see actions/walk.lua). Kept across mod updates: the engine
+  -- still answers requests made before the update.
+  storage.path_requests = storage.path_requests or {}
+  storage.path_results = storage.path_results or {}
   -- chunked RPC responses: { next_id, by_id = { [id] = { parts = {...}, created_tick } } }
   storage.rpc_outbox = storage.rpc_outbox or { next_id = 1, by_id = {} }
   -- event log read with cursors (see scripts/events.lua)
