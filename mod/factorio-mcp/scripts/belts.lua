@@ -32,20 +32,37 @@ local function belt_at(c, p)
   return e
 end
 
--- items on a belt's two lanes: {left = {name = n}, right = {...}}, counts
+-- items on a belt's two lanes: {left = {name = n}, right = {...}}, counts.
+-- 2.0 transport lines span whole runs of belts: every tile of a run reports
+-- the SAME items (get_contents is the run's, not the tile's). The third
+-- return carries the line objects so callers can dedupe runs.
 local function lanes(e)
   local out = { left = {}, right = {} }
   local n = { left = 0, right = 0 }
+  local lines = {}
   pcall(function()
     for i = 1, math.min(e.get_max_transport_line_index(), 2) do
       local side = i == 1 and "left" or "right"
-      for _, it in ipairs(e.get_transport_line(i).get_contents()) do
+      local line = e.get_transport_line(i)
+      lines[side] = line
+      for _, it in ipairs(line.get_contents()) do
         out[side][it.name] = (out[side][it.name] or 0) + it.count
         n[side] = n[side] + it.count
       end
     end
   end)
-  return out, n
+  return out, n, lines
+end
+
+-- whether two LuaTransportLine objects are the same internal line (lines
+-- can span multiple tiles). Falls back to identity when line_equals is
+-- unavailable — then runs cannot be told apart and counting stays per-tile.
+local function same_line(a, b)
+  if a == nil or b == nil then return false end
+  local same = false
+  pcall(function() same = a:line_equals(b) end)
+  if not same then same = (a == b) end
+  return same
 end
 
 -- Belt capacity per lane in items/s: speed (tiles/s) x 4 items per tile, x belt stacking.
@@ -180,33 +197,72 @@ function M.trace(params)
   for i, e in ipairs(line) do on_line[math.floor(e.position.x) .. "," .. math.floor(e.position.y)] = i end
   local function line_index(q) return on_line[math.floor(q.x) .. "," .. math.floor(q.y)] end
 
-  -- legs: runs of one direction
+  -- legs: runs of one direction. Items are counted ONCE per internal line —
+  -- 2.0 transport lines span whole runs of belts, so every tile of a run
+  -- reports the same items and summing per-tile reads double-counts (a
+  -- 49-tile leg once read 197 items against a physical capacity of 196,
+  -- 101%). Each leg's fill is measured against the length of the runs under
+  -- it (a run can continue through a corner into the next leg; it carries
+  -- its items and length to every leg it touches, counted once).
   local legs, cur = {}, nil
   local cap = lane_capacity(start, c.force)
-  for i, e in ipairs(line) do
-    local items, n = lanes(e)
+  local runs = { left = {}, right = {} } -- unique internal lines per side
+  for _, e in ipairs(line) do
+    local items, n, lines = lanes(e)
     local kind = e.type == "underground-belt" and ("underground " .. e.belt_to_ground_type)
       or (e.type == "splitter" and "splitter" or nil)
     if not cur or cur.direction ~= e.direction or kind or cur.kind then
       cur = { direction = e.direction, from = pos(e), to = pos(e), tiles = 0, kind = kind,
-        left = {}, right = {}, n_left = 0, n_right = 0, first = i,
+        left = {}, right = {}, n_left = 0, n_right = 0,
         note = e.type == "underground-belt" and M.underground_note(e) or nil }
       legs[#legs + 1] = cur
     end
     cur.to = pos(e)
     cur.tiles = cur.tiles + 1
-    for side, t in pairs(items) do
-      for name, k in pairs(t) do cur[side][name] = (cur[side][name] or 0) + k end
+    for _, side in ipairs({ "left", "right" }) do
+      local l = lines[side]
+      if l then
+        local entry
+        for _, r in ipairs(runs[side]) do
+          if same_line(r.line, l) then entry = r break end
+        end
+        if not entry then
+          local len
+          pcall(function() len = l.total_segment_length end)
+          entry = { line = l, len = len, tiles = 0, items = {}, n = 0, leg_marks = {} }
+          runs[side][#runs[side] + 1] = entry
+          -- this run's items, read once, at the tile where the trace first meets it
+          for name, k in pairs(items[side] or {}) do entry.items[name] = k end
+          entry.n = n[side]
+        end
+        entry.tiles = entry.tiles + 1
+        entry.leg_marks[cur] = true
+      else
+        -- no line object to compare (the read failed): count per tile
+        for name, k in pairs(items[side] or {}) do
+          cur[side][name] = (cur[side][name] or 0) + k
+        end
+        cur["n_" .. side] = cur["n_" .. side] + n[side]
+      end
     end
-    cur.n_left, cur.n_right = cur.n_left + n.left, cur.n_right + n.right
   end
   for _, leg in ipairs(legs) do
     local sides = SIDES[leg.direction] or { "?", "?" }
     leg.left_side, leg.right_side = sides[1], sides[2]
     leg.moving = DIR[leg.direction] or tostring(leg.direction)
-    leg.fill_left = math.floor(100 * leg.n_left / (4 * leg.tiles) + 0.5)
-    leg.fill_right = math.floor(100 * leg.n_right / (4 * leg.tiles) + 0.5)
-    leg.first = nil
+    for _, side in ipairs({ "left", "right" }) do
+      local n, len = 0, 0
+      for _, r in ipairs(runs[side]) do
+        if r.leg_marks[leg] then
+          for name, k in pairs(r.items) do leg[side][name] = (leg[side][name] or 0) + k end
+          n = n + r.n
+          len = len + math.max(r.len or r.tiles, r.tiles, 1)
+        end
+      end
+      leg["n_" .. side] = leg["n_" .. side] + n
+      local denom = 4 * (len > 0 and len or leg.tiles)
+      leg["fill_" .. side] = denom > 0 and math.floor(100 * leg["n_" .. side] / denom + 0.5) or 0
+    end
   end
 
   -- feeders and takers: inserters and drills touching the line, side-loads
@@ -337,6 +393,10 @@ function M.measure.tick(task)
   local state
   if not m.changed and (now.left + now.right) > 0 then
     state = "NOT MOVING — the items on it stayed put the whole time (backed up: blocked or a dead end downstream)"
+  elseif total == 0 and (now.left + now.right) > 0 then
+    state = string.format("empty — nothing NEW entered this belt's run in %gs; %d item(s) were already on it "
+      .. "(a 2.0 lane spans the whole connected run, so those sit somewhere other than this tile)",
+      m.secs, now.left + now.right)
   elseif total == 0 then
     state = "empty — nothing passed"
   else

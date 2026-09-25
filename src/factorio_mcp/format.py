@@ -151,6 +151,17 @@ def inspect(e: dict[str, Any]) -> str:
                          f"{f' ({ls} side)' if ls else ''}: {left}; right lane{f' ({rs} side)' if rs else ''}: {right}.")
         else:
             parts.append(f"On the belt: {items_text(bc)}." if bc else "Nothing on the belt.")
+        seg = e.get("belt_segment") or {}
+        runs_note = (f"its whole connected run ({num(seg['tiles'])} tile(s))" if seg.get("tiles")
+                     else "its whole connected run")
+        parts.append(f"Belt reads are run-wide, not tile-wide: the counts above are {runs_note}"
+                     " — items may sit anywhere along it.")
+        pos = as_list(seg.get("positions"))
+        if pos:
+            bits = ", ".join(f"{num(p.get('count', 1))} {p['name']} ({p.get('lane')} lane) at "
+                             f"({p['at']['x']}, {p['at']['y']}), {num(p.get('dist', 0))} tiles away"
+                             for p in pos)
+            parts.append(f"Items actually sit at: {bits}.")
     if e.get("fluid_connections"):
         fc = []
         for c in as_list(e["fluid_connections"]):
@@ -408,7 +419,9 @@ def belt_trace(r: dict[str, Any]) -> str:
     lines.append("Fed by: " + ("; ".join(fed) if fed else "nothing (no inserter, drill or side-load drops onto it)") + ".")
     lines.append("Taken by: " + ("; ".join(taken) if taken else "no inserter picks from it") + ".")
     lines.append(f"Capacity: {r.get('lane_capacity_per_min')}/min per lane. A full lane holds 4 items per tile; "
-                 "a full but unmoving line is backed up (measure_belt tells flowing from stuck).")
+                 "a full but unmoving line is backed up (measure_belt tells flowing from stuck). Items and fill are "
+                 "counted once per connected run of belts (2.0 lanes span the whole run — every tile of a run reports "
+                 "the same items, and a run carries its count into each leg it touches).")
     return "\n".join(lines)
 
 

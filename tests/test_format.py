@@ -3,7 +3,7 @@ outputs onto ONE tile) and the legend's letter ordering (every letter
 findable at a glance — a coal-field scan was read as missing legend entries
 for k and q in a 22-line unordered wall)."""
 
-from factorio_mcp.format import legend_lines, scan
+from factorio_mcp.format import inspect as fmt_inspect, legend_lines, scan
 
 
 def scan_result(**over):
@@ -70,3 +70,42 @@ def test_scan_renders_the_inserter_footer_with_direction():
             "the north tile and drop south):") in lines
     assert ("  burner-inserter at (28.5, -16.5) facing north: picks from transport-belt at (28.5, -17.5) "
             "-> drops into iron-chest at (28.5, -15.3)") in lines
+
+
+# --------------------------------------------------- segment-scoped belt reads
+# (0.2.21: 2.0 transport lines span whole runs of belts — the counts are the
+# run's, and the read must say so, plus where items actually sit)
+
+def belt_entity(**over):
+    e = {
+        "name": "transport-belt", "position": {"x": -1.5, "y": 4.5},
+        "belt_lanes": {"left": {"logistic-science-pack": 4}, "right": {}},
+        "belt_direction": 0,
+        "belt_segment": {"tiles": 39, "positions": [
+            {"lane": "left", "name": "logistic-science-pack", "count": 4,
+             "at": {"x": -1.5, "y": 1.5}, "dist": 3.0},
+        ]},
+    }
+    e.update(over)
+    return e
+
+
+def test_belt_reads_say_run_wide_with_item_positions():
+    out = fmt_inspect(belt_entity())
+    assert "Belt reads are run-wide, not tile-wide: the counts above are its whole connected run (39 tile(s))" in out
+    assert "Items actually sit at: 4 logistic-science-pack (left lane) at (-1.5, 1.5), 3 tiles away." in out
+
+
+def test_belt_run_note_without_positions():
+    e = belt_entity(belt_segment={"tiles": 2, "positions": []})
+    out = fmt_inspect(e)
+    assert "its whole connected run (2 tile(s))" in out
+    assert "Items actually sit at" not in out
+
+
+def test_belt_run_note_without_segment_data():
+    # a read from an older mod (no belt_segment field): the honesty note stands
+    e = belt_entity(belt_segment=None)
+    e.pop("belt_segment")
+    out = fmt_inspect(e)
+    assert "Belt reads are run-wide, not tile-wide: the counts above are its whole connected run" in out

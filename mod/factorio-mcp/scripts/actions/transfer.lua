@@ -62,9 +62,36 @@ M.insert = {}
 -- lane, as long as there is room); LuaEntity.insert refuses belts.
 local BELTS = { ["transport-belt"] = true, ["underground-belt"] = true, splitter = true }
 
--- Slots along one belt tile's lane (0 = its output end): a player dropping
--- items fills the tile; up to 4 per lane, 8 per tile.
+-- Slots across one belt tile's span on its lane (offsets around the tile's
+-- centre: a player dropping items fills the tile; up to 4 per lane, 8 per
+-- tile).
 local SLOTS = { 0.875, 0.625, 0.375, 0.125 }
+
+-- Where this belt tile sits on its (possibly multi-tile) internal line, so
+-- inserts land on the tile being fed. 2.0 transport lines span whole runs
+-- of belts and line positions address the whole run: raw slots 0..1 land on
+-- the run's first tile, which can be many tiles from the target. Maps line
+-- positions to map positions to find this tile's centre on the line. Falls
+-- back to the raw slots when the mapping API is unavailable (items then
+-- enter at the run's start and ride down to the target).
+local function tile_span(line, e)
+  local ok = pcall(function() return line.get_line_item_position end)
+  if not ok then return nil end
+  local len = 1
+  pcall(function() len = line.line_length or 1 end)
+  local best, bestd = nil, math.huge
+  for p = 0.5, math.min(len, 200), 1 do
+    local mp
+    pcall(function() mp = line.get_line_item_position(p) end)
+    if mp then
+      local d = math.abs(mp.x - e.position.x) + math.abs(mp.y - e.position.y)
+      if d < bestd then best, bestd = p, d end
+      if d <= 0.1 then break end
+    end
+  end
+  if best and bestd <= 0.75 then return best end
+  return nil
+end
 
 local function belt_insert(e, spec)
   local n = 0
@@ -72,8 +99,12 @@ local function belt_insert(e, spec)
     local max_i = math.min(e.get_max_transport_line_index(), 2)
     for i = 1, max_i do
       local line = e.get_transport_line(i)
-      for _, at in ipairs(SLOTS) do
+      local base = tile_span(line, e)
+      for _, off in ipairs(SLOTS) do
         if n >= spec.count then break end
+        -- within this tile's span on the line (base +/- 0.5); the raw slot
+        -- when the span couldn't be mapped
+        local at = base and (base + off - 0.5) or off
         local ok = false
         pcall(function()
           if line.can_insert_at(at) then ok = line.insert_at(at, { name = spec.name, count = 1, quality = spec.quality }) end
@@ -86,10 +117,13 @@ local function belt_insert(e, spec)
   return n
 end
 
--- The mirror of belt_insert: take `count` of `key` off this belt tile's own
--- lanes (what is on the tile at this moment — items on belts move). A player
--- can only get belt items by mining the belt; like belt_insert, this is the
--- mod's affordance for feeding and draining belts (a full tile holds up to 8).
+-- The mirror of belt_insert: take `count` of `key` off this belt's line.
+-- 2.0 lanes span the whole connected run and remove_item has no position —
+-- it takes from anywhere on the run, so what lands in hand may have sat far
+-- from the target tile (and a dead-end pile can be drained from any tile
+-- of the run, which the fleet uses). A player can only get belt items by
+-- mining the belt; like belt_insert, this is the mod's affordance for
+-- feeding and draining belts.
 local function belt_extract(e, key, count)
   local name, quality = items.parse(key)
   local n = 0
@@ -103,7 +137,8 @@ local function belt_extract(e, key, count)
   return n
 end
 
--- Everything on a belt tile's own lanes: {["coal"] = 4, ["iron-plate@rare"] = 1}
+-- Everything on this belt's line — the WHOLE connected run (2.0 lanes span
+-- it), not just the target tile: {["coal"] = 4, ["iron-plate@rare"] = 1}
 local function belt_contents(e)
   local out = {}
   pcall(function()

@@ -121,7 +121,8 @@ For inserters — `place` and `rotate` alike — the 16-way direction is the sid
   - It returns `{start, tiles, legs, begins, ends, fed_by, taken_by, lane_capacity_per_min}`.
   - Each leg is a run in one direction: `{from, to, tiles, moving, kind?, left, right, left_side, right_side, fill_left, fill_right}`. Lanes are named by the direction of travel, with the compass side they're on.
   - `ends` describes a dead end, a side-load onto another belt, a building the line faces, or unexplored ground.
-- Job `measure_belt {target, seconds}` samples the tile every 2 ticks and counts items (by unique id) that arrive on each lane after the first sample. It reports items/min per lane against the capacity (belt speed × 4 items per tile × belt stacking), and whether the belt is flowing, backed up (nothing moved) or empty.
+- Job `measure_belt {target, seconds}` samples the belt every 2 ticks and counts items (by unique id) that arrive on each lane after the first sample. It reports items/min per lane against the capacity (belt speed × 4 items per tile × belt stacking), and whether the belt is flowing, backed up (nothing moved) or empty — "empty" with items still reading says nothing new entered the belt's whole connected run (2.0 transport lines span the run: lane reads and arrivals are run-wide, not tile-wide).
+- 2.0 transport lines span whole runs of belts: `get_contents` on any tile of a run returns the run's items. `trace_belt` counts each run once (fill % against the run's length; a run carries its items and length through corner legs), `inspect_entity` says a belt read is run-wide and lists where items actually sit (map positions), `insert_items` onto a belt places items on the target tile's span of the run (raw line positions address the whole run), and `extract_items` takes from anywhere on the run (a dead-end pile can be drained from any tile of its run).
 
 ### Map overview
 

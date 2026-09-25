@@ -1125,13 +1125,16 @@ def register(app: MCPServer, game: Game) -> None:
     @tool("Check a belt line: follows it both ways from the belt at x,y (through turns, undergrounds and splitters) and "
           "lists its legs (which way items move), how it starts and ends (dead end, side-load, a building it can't "
           "feed), what feeds it (inserters, drills, side-loads) and what takes from it, and the items on each lane "
-          "with fill %. Use after building a belt; measure_belt checks real throughput.")
+          "with fill % — counted once per connected run of belts (2.0 lanes span the whole run; every tile of a run "
+          "reports the same items). Use after building a belt; measure_belt checks real throughput.")
     async def trace_belt(x: Coord, y: Coord) -> str:
         return fmt.belt_trace(await game.call("trace_belt", {"position": {"x": x, "y": y}}))
 
     @tool("Queue a job that watches the belt at x,y for `seconds` and counts the items that actually pass, per lane, "
           "against the belt's capacity (a yellow belt: 450/min per lane, 900/min in total). It says whether the belt "
-          "is flowing, backed up (items not moving) or empty. Waits for the result by default.")
+          "is flowing, backed up (items not moving) or empty — and when it says empty while items sit on the belt, "
+          "that nothing new entered its whole connected run (lane reads are run-wide, not tile-wide). "
+          "Waits for the result by default.")
     async def measure_belt(x: Coord, y: Coord, seconds: Annotated[float, Field(ge=2, le=120)] = 10,
                            wait_s: WaitS = None, replace: Replace = False) -> str:
         return await run_job({"type": "measure_belt", "target": {"x": x, "y": y}, "seconds": seconds},

@@ -100,6 +100,49 @@ local function collect_belt_lanes(e)
   return lanes
 end
 
+-- 2.0 transport lines span whole runs of belts: get_contents reports every
+-- item on the run, not the tile (the counts above are the run's). This says
+-- how long the run is and where a few items actually sit (map positions), so
+-- a read never implies the items are at this tile.
+local function collect_belt_segment(e)
+  if not BELT_TYPES[e.type] then return nil end
+  local seg = { positions = {} }
+  local side_names = { [1] = "left", [2] = "right" }
+  pcall(function()
+    for i = 1, math.min(e.get_max_transport_line_index(), 2) do
+      local line = e.get_transport_line(i)
+      pcall(function()
+        local len = line.total_segment_length
+        if type(len) == "number" then
+          len = math.floor(len + 0.5)
+          if not seg.tiles or len > seg.tiles then seg.tiles = len end
+        end
+      end)
+      local ok, det = pcall(line.get_detailed_contents)
+      if ok and type(det) == "table" then
+        for _, it in ipairs(det) do
+          if #seg.positions >= 6 then break end
+          local name, count
+          pcall(function() name = it.stack.name count = it.stack.count end)
+          local at
+          pcall(function()
+            local mp = line.get_line_item_position(it.position)
+            if mp then at = { x = round1(mp.x), y = round1(mp.y) } end
+          end)
+          if name and at then
+            local d = math.abs(at.x - e.position.x) + math.abs(at.y - e.position.y)
+            seg.positions[#seg.positions + 1] =
+              { lane = side_names[i] or tostring(i), name = name, count = count or 1, at = at, dist = d }
+          end
+        end
+      end
+    end
+    table.sort(seg.positions, function(a, b) return a.dist < b.dist end)
+  end)
+  if seg.tiles == nil and #seg.positions == 0 then return nil end
+  return seg
+end
+
 local function collect_belt_contents(e)
   if not BELT_TYPES[e.type] then return nil end
   local totals = {}
@@ -302,6 +345,8 @@ local function inspect_one(params)
   if lanes then
     out.belt_lanes = lanes
     out.belt_direction = e.direction
+    local seg = collect_belt_segment(e)
+    if seg then out.belt_segment = seg end
     -- where items go next, and where they come from (y grows south)
     pcall(function()
       local bn = e.belt_neighbours
