@@ -100,10 +100,14 @@ local function collect_belt_lanes(e)
   return lanes
 end
 
--- 2.0 transport lines span whole runs of belts: get_contents reports every
--- item on the run, not the tile (the counts above are the run's). This says
--- how long the run is and where a few items actually sit (map positions), so
--- a read never implies the items are at this tile.
+-- A 2.0 transport line is read per belt entity, but the internal line it
+-- wraps CAN span multiple tiles (line_equals is true across different
+-- owners): get_contents reports the LINE's items, which is more than this
+-- tile's wherever the line spans tiles. This says how long the line is and
+-- where a few items actually sit (map positions), so a read never implies
+-- the items are at this tile. (total_segment_length is a LARGER scope — the
+-- segment of lines directly connected front and back — and is not the read
+-- scope; the length here is line_length.)
 local function collect_belt_segment(e)
   if not BELT_TYPES[e.type] then return nil end
   local seg = { positions = {} }
@@ -112,7 +116,7 @@ local function collect_belt_segment(e)
     for i = 1, math.min(e.get_max_transport_line_index(), 2) do
       local line = e.get_transport_line(i)
       pcall(function()
-        local len = line.total_segment_length
+        local len = line.line_length
         if type(len) == "number" then
           len = math.floor(len + 0.5)
           if not seg.tiles or len > seg.tiles then seg.tiles = len end

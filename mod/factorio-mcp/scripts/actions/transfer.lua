@@ -68,12 +68,12 @@ local BELTS = { ["transport-belt"] = true, ["underground-belt"] = true, splitter
 local SLOTS = { 0.875, 0.625, 0.375, 0.125 }
 
 -- Where this belt tile sits on its (possibly multi-tile) internal line, so
--- inserts land on the tile being fed. 2.0 transport lines span whole runs
--- of belts and line positions address the whole run: raw slots 0..1 land on
--- the run's first tile, which can be many tiles from the target. Maps line
+-- inserts land on the tile being fed. A 2.0 transport line can span multiple
+-- tiles and line positions address the whole line: raw slots 0..1 land on
+-- the line's first tile, which can be tiles from the target. Maps line
 -- positions to map positions to find this tile's centre on the line. Falls
 -- back to the raw slots when the mapping API is unavailable (items then
--- enter at the run's start and ride down to the target).
+-- enter at the line's start and ride down to the target).
 local function tile_span(line, e)
   local ok = pcall(function() return line.get_line_item_position end)
   if not ok then return nil end
@@ -118,12 +118,12 @@ local function belt_insert(e, spec)
 end
 
 -- The mirror of belt_insert: take `count` of `key` off this belt's line.
--- 2.0 lanes span the whole connected run and remove_item has no position —
--- it takes from anywhere on the run, so what lands in hand may have sat far
--- from the target tile (and a dead-end pile can be drained from any tile
--- of the run, which the fleet uses). A player can only get belt items by
--- mining the belt; like belt_insert, this is the mod's affordance for
--- feeding and draining belts.
+-- remove_item has no position — it takes from anywhere on the belt's
+-- transport line (which can span multiple tiles), so what lands in hand may
+-- have sat far from the target tile (and a dead-end pile can be drained
+-- from any tile of its line, which the fleet uses). A player can only get
+-- belt items by mining the belt; like belt_insert, this is the mod's
+-- affordance for feeding and draining belts.
 local function belt_extract(e, key, count)
   local name, quality = items.parse(key)
   local n = 0
@@ -137,8 +137,8 @@ local function belt_extract(e, key, count)
   return n
 end
 
--- Everything on this belt's line — the WHOLE connected run (2.0 lanes span
--- it), not just the target tile: {["coal"] = 4, ["iron-plate@rare"] = 1}
+-- Everything on this belt's transport line (a 2.0 line can span multiple
+-- tiles), not just the target tile: {["coal"] = 4, ["iron-plate@rare"] = 1}
 local function belt_contents(e)
   local out = {}
   pcall(function()

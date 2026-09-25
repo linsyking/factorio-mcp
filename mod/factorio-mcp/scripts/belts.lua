@@ -33,9 +33,11 @@ local function belt_at(c, p)
 end
 
 -- items on a belt's two lanes: {left = {name = n}, right = {...}}, counts.
--- 2.0 transport lines span whole runs of belts: every tile of a run reports
--- the SAME items (get_contents is the run's, not the tile's). The third
--- return carries the line objects so callers can dedupe runs.
+-- A 2.0 transport line is read per belt entity, but the internal line it
+-- wraps CAN span multiple tiles (line_equals is true across different
+-- owners): get_contents reports the LINE's items — where a line spans
+-- tiles, more than this tile's. The third return carries the line objects
+-- so callers can dedupe lines.
 local function lanes(e)
   local out = { left = {}, right = {} }
   local n = { left = 0, right = 0 }
@@ -198,11 +200,13 @@ function M.trace(params)
   local function line_index(q) return on_line[math.floor(q.x) .. "," .. math.floor(q.y)] end
 
   -- legs: runs of one direction. Items are counted ONCE per internal line —
-  -- 2.0 transport lines span whole runs of belts, so every tile of a run
-  -- reports the same items and summing per-tile reads double-counts (a
-  -- 49-tile leg once read 197 items against a physical capacity of 196,
-  -- 101%). Each leg's fill is measured against the length of the runs under
-  -- it (a run can continue through a corner into the next leg; it carries
+  -- where a line spans multiple tiles, every tile of it reports the same
+  -- items and summing per-tile reads double-counts. Each leg's fill is
+  -- measured against the length of the lines under it (line_length — NOT
+  -- total_segment_length, which is a larger scope: the segment of this line
+  -- plus every line directly connected front and back; measured against a
+  -- 61-tile segment, a 49-tile lab-spine leg read 1% full while holding
+  -- 83%. A line can continue through a corner into the next leg; it carries
   -- its items and length to every leg it touches, counted once).
   local legs, cur = {}, nil
   local cap = lane_capacity(start, c.force)
@@ -228,7 +232,7 @@ function M.trace(params)
         end
         if not entry then
           local len
-          pcall(function() len = l.total_segment_length end)
+          pcall(function() len = l.line_length end)
           entry = { line = l, len = len, tiles = 0, items = {}, n = 0, leg_marks = {} }
           runs[side][#runs[side] + 1] = entry
           -- this run's items, read once, at the tile where the trace first meets it
@@ -394,8 +398,8 @@ function M.measure.tick(task)
   if not m.changed and (now.left + now.right) > 0 then
     state = "NOT MOVING — the items on it stayed put the whole time (backed up: blocked or a dead end downstream)"
   elseif total == 0 and (now.left + now.right) > 0 then
-    state = string.format("empty — nothing NEW entered this belt's run in %gs; %d item(s) were already on it "
-      .. "(a 2.0 lane spans the whole connected run, so those sit somewhere other than this tile)",
+    state = string.format("empty — nothing NEW entered this belt's transport line in %gs; %d item(s) were already on it "
+      .. "(a 2.0 line can span multiple tiles, so those sit somewhere other than this tile)",
       m.secs, now.left + now.right)
   elseif total == 0 then
     state = "empty — nothing passed"

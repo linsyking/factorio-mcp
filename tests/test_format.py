@@ -90,22 +90,22 @@ def belt_entity(**over):
     return e
 
 
-def test_belt_reads_say_run_wide_with_item_positions():
+def test_belt_reads_say_line_scoped_with_item_positions():
     out = fmt_inspect(belt_entity())
-    assert "Belt reads are run-wide, not tile-wide: the counts above are its whole connected run (39 tile(s))" in out
+    assert "Belt reads are line-scoped, not tile-wide: the counts above are its whole transport line (39 tile(s))" in out
     assert "Items actually sit at: 4 logistic-science-pack (left lane) at (-1.5, 1.5), 3 tiles away." in out
 
 
-def test_belt_run_note_without_positions():
+def test_belt_line_note_without_positions():
     e = belt_entity(belt_segment={"tiles": 2, "positions": []})
     out = fmt_inspect(e)
-    assert "its whole connected run (2 tile(s))" in out
+    assert "its whole transport line (2 tile(s))" in out
     assert "Items actually sit at" not in out
 
 
-def test_belt_run_note_without_segment_data():
+def test_belt_line_note_without_segment_data():
     # a read from an older mod (no belt_segment field): the honesty note stands
     e = belt_entity(belt_segment=None)
     e.pop("belt_segment")
     out = fmt_inspect(e)
-    assert "Belt reads are run-wide, not tile-wide: the counts above are its whole connected run" in out
+    assert "Belt reads are line-scoped, not tile-wide: the counts above are its whole transport line" in out
