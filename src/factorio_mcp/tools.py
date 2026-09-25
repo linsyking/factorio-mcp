@@ -133,6 +133,8 @@ NO_INBOX = {"read_chat", "wait_for_events", "status"}
 # or probed characterless when tools are listed before a bind).
 TOOL_MIN_MOD: dict[str, tuple[int, ...]] = {
     "pick_up": (0, 2, 18),  # introduced in mod 0.2.18
+    "list_technologies": (0, 2, 21),  # introduced in mod 0.2.21
+    "cancel_research": (0, 2, 21),  # introduced in mod 0.2.21
 }
 
 
@@ -669,6 +671,31 @@ def register(app: MCPServer, game: Game) -> None:
     async def start_research(technology: str) -> str:
         r = await game.call("start_research", {"technology": technology})
         return f"Research queued: {r['technology']}."
+
+    @tool("Every technology for your force: internal name (exactly what start_research takes), display label, status "
+          "(researched / in-progress / queued / available / trigger / locked), prerequisites, and the total research "
+          "bill per science pack. Default status='available' — the unlocked-but-unresearched set, the immediate want "
+          "for planning; 'all' for the whole tree, or search=<substring> to filter by name. The live research queue "
+          "with its order is always included, so queueing and cancelling are verifiable.")
+    async def list_technologies(
+        status: Literal["researched", "in-progress", "queued", "available", "trigger", "locked", "all"] | None = None,
+        search: str | None = None,
+    ) -> str:
+        p = {k: v for k, v in (("status", status), ("search", search)) if v}
+        return fmt.tech_tree(await game.call("list_technologies", p))
+
+    @tool("Remove a technology from the research queue — queued, not-yet-started techs only (the research in progress "
+          "is refused: cancelling it would discard its progress). Returns the queue order after the removal.")
+    async def cancel_research(technology: str) -> str:
+        r = await game.call("cancel_research", {"technology": technology})
+        q = ", ".join(as_list(r.get("queue"))) or "empty"
+        out = f"Removed {r['removed']} from the research queue. Queue now: {q}."
+        dropped = as_list(r.get("dropped"))
+        if dropped:
+            out += f" WARNING: the engine dropped {', '.join(dropped)} from the queue as well."
+        if r.get("note"):
+            out += f" ({r['note']})"
+        return out
 
     @tool("Move a gun, ammo and/or armor from your main inventory into your equipment slots, and/or unequip slots "
           "(unequip=[\"ammo\"] moves the ammo slot's contents back to the main inventory; crafted or picked-up ammo "

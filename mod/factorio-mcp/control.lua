@@ -99,6 +99,8 @@ rpc.register("route_pipe", route.route_pipe)
 
 -- instant actions
 rpc.register("start_research", research.start_research)
+rpc.register("list_technologies", research.list_technologies)
+rpc.register("cancel_research", research.cancel_research)
 rpc.register("equip", equipment.equip)
 rpc.register("exit_vehicle", drive.exit)
 rpc.register("set_train_schedule", trains.set_train_schedule)

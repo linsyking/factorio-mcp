@@ -410,3 +410,38 @@ def belt_trace(r: dict[str, Any]) -> str:
     lines.append(f"Capacity: {r.get('lane_capacity_per_min')}/min per lane. A full lane holds 4 items per tile; "
                  "a full but unmoving line is backed up (measure_belt tells flowing from stuck).")
     return "\n".join(lines)
+
+
+def tech_tree(r: dict[str, Any]) -> str:
+    cur = r.get("current")
+    lines = [f"Research in progress: {cur} ({r.get('progress', 0)}% done)." if cur else "No research in progress."]
+    queue = [str(x) for x in as_list(r.get("queue"))]
+    if queue:
+        lines.append("Queue: " + " -> ".join(queue) + ".")
+    else:
+        lines.append("Queue: empty.")
+    counts = r.get("counts") or {}
+    order = ["researched", "in-progress", "queued", "available", "trigger", "locked"]
+    lines.append("Technologies: " + ", ".join(f"{k} {counts.get(k, 0)}" for k in order) + ".")
+    techs = as_list(r.get("techs"))
+    what = f"status {r.get('filter')}" + (f", search '{r.get('search')}'" if r.get("search") else "")
+    lines.append(f"Showing {len(techs)} with {what}:")
+    if not techs:
+        lines.append("  (none)")
+    for t in techs:
+        tags = []
+        level = t.get("level") or 1
+        if level > 1 or t.get("infinite"):
+            tags.append(f"level {level}" + (", infinite" if t.get("infinite") else ""))
+        missing = as_list(t.get("missing"))
+        if t.get("status") == "locked":
+            tags.append("needs " + (", ".join(missing) if missing else "prerequisites not yet met"))
+        elif missing:
+            tags.append("missing " + ", ".join(missing))
+        bill = t.get("bill") or {}
+        if bill:
+            tags.append("bill " + " + ".join(f"{num(v)} {k}" for k, v in sorted(bill.items())))
+        if t.get("unit_time_s"):
+            tags.append(f"{num(t['unit_time_s'])}s/unit at one lab (speed 1)")
+        lines.append("  " + t["name"] + f" ({t.get('label')})" + (": " + "; ".join(tags) if tags else ""))
+    return "\n".join(lines)

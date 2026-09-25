@@ -65,6 +65,7 @@ All results are filtered by fog of war (`scripts/vision.lua`):
 | `find_buildable_area {width, height, near, max_distance}` | Known ground only |
 | `describe_prototype {names≤10}` | Static prototype data |
 | `production_stats {window, names?, kind?, top?}` | Force item and fluid flows on the character's surface. `window` ∈ 5s, 1m, 10m, 1h, 10h, 50h, 250h, 1000h. Returns `produced_per_min`, `consumed_per_min`, `net_per_min` and all-time totals |
+| `list_technologies {status?, search?}` | Every technology for the force: internal name (exactly what `start_research` takes), display label, status (researched / in-progress / queued / available / trigger / locked), prerequisites (missing ones named), the total research bill per science pack, and per-unit time at one speed-1 lab (derived as unit energy / 60). `status` filters (default `available` — the unlocked-but-unresearched set), `search` is a name substring; the live research queue in order ([1] = in progress) is always included |
 | `list_trains`, `list_blueprints`, `read_blueprint`, `import_blueprint {string}` | Blueprints: only ones the character carries, or export strings |
 | `export_blueprint {area: [{x,y},{x,y}]}` | Own buildings in a known area of at most 200×200 tiles. Returns `{string, entity_counts, total_entities, size, anchor}` |
 | `get_chat {since_id}` | Everything after the cursor except this character's own lines. Agent lines have `bot: true` |
@@ -75,7 +76,7 @@ All results are filtered by fog of war (`scripts/vision.lua`):
 
 ## Instant actions
 
-`say {text}`, `start_research {technology}`, `equip {gun?, ammo?, armor?}`, `exit_vehicle`, `set_train_schedule {train_id, stops}`.
+`say {text}`, `start_research {technology}`, `cancel_research {technology}`, `equip {gun?, ammo?, armor?}`, `exit_vehicle`, `set_train_schedule {train_id, stops}`.
 
 ## Jobs
 

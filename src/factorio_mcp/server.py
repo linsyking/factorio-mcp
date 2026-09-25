@@ -39,6 +39,9 @@ Model of the world:
   your next tool result carries an ALERTS line, e.g. "ALERTS: no-power 38 (+38 since your last call)" — steady state
   prints nothing. waiting-for-space back-pressure never triggers the line; it only rides as a trailing summary count.
   map_warnings gives the full punch list with positions.
+- list_technologies shows the whole tech tree for your force (default: available — unlocked but unresearched) with
+  prerequisites, research bills and the live research queue in order; start_research queues behind the current tech;
+  cancel_research removes a queued, not-yet-started tech (the one in progress is refused — it would lose progress).
 - Your character follows normal player mechanics: walking speed, hand-mining and crafting time, reach and build range,
   items come from and go to its own inventory, placement rules. Nothing is created from nothing.
 - Fog of war: you only perceive explored ground (chunks your character or your force has seen). Unexplored tiles
