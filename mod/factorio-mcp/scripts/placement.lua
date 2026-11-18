@@ -41,13 +41,27 @@ end
 -- entity and how many items it holds, or nil.
 local IGNORE = { character = true, ["entity-ghost"] = true, ["tile-ghost"] = true, ["item-entity"] = true,
   ["item-request-proxy"] = true, resource = true, corpse = true, ["character-corpse"] = true }
+-- Rolling stock stands ON rails: the rails under a locomotive or wagon are
+-- its foundation, not an occupant (placing it never replaces them). Without
+-- this every locomotive/wagon placement failed with "the straight-rail ...
+-- is in the way". The engine's can_place_entity still checks the rest
+-- (no rail there, other trains, buildings).
+local ROLLING_STOCK = { locomotive = true, ["cargo-wagon"] = true, ["fluid-wagon"] = true,
+  ["artillery-wagon"] = true, ["infinity-cargo-wagon"] = true }
+local RAIL = { ["straight-rail"] = true, ["curved-rail-a"] = true, ["curved-rail-b"] = true,
+  ["half-diagonal-rail"] = true, ["legacy-straight-rail"] = true, ["legacy-curved-rail"] = true,
+  ["rail-ramp"] = true, ["rail-support"] = true, ["elevated-straight-rail"] = true,
+  ["elevated-curved-rail-a"] = true, ["elevated-curved-rail-b"] = true, ["elevated-half-diagonal-rail"] = true }
+M.RAIL_TYPES = RAIL
+
 function M.occupant(c, entity_name, pos, direction)
   local proto = prototypes.entity[entity_name]
   if not proto then return nil end
+  local on_rails = ROLLING_STOCK[proto.type] == true
   local a = M.footprint(proto, pos, direction)
   local area = { { a[1][1] + 0.05, a[1][2] + 0.05 }, { a[2][1] - 0.05, a[2][2] - 0.05 } }
   for _, e in ipairs(c.surface.find_entities_filtered({ area = area, force = c.force })) do
-    if e.valid and not IGNORE[e.type] then
+    if e.valid and not IGNORE[e.type] and not (on_rails and RAIL[e.type]) then
       local n = 0
       pcall(function()
         for i = 1, e.get_max_inventory_index() do
