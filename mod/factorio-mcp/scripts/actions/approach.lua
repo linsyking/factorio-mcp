@@ -151,7 +151,16 @@ end
 
 function M.find_entity_near(c, pos, radius)
   local candidates = c.surface.find_entities_filtered({ position = pos, radius = radius or 1.5 })
-  return M.pick_entity(candidates, pos, function(e) return e ~= c and not SKIP_TYPES[e.type] end)
+  local function accept(e) return e ~= c and not SKIP_TYPES[e.type] end
+  -- Rails are floor: a locomotive or wagon standing on them is what a point
+  -- on the train means (inserting fuel used to hit "the straight-rail
+  -- wouldn't accept coal"). Rails still win where nothing else covers the point.
+  local rails = placement.RAIL_TYPES or {}
+  local e, note, inside = M.pick_entity(candidates, pos, function(x)
+    return accept(x) and not rails[x.type]
+  end)
+  if inside then return e, note, inside end
+  return M.pick_entity(candidates, pos, accept)
 end
 
 return M
